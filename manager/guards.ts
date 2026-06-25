@@ -81,7 +81,6 @@ export interface HealthResult {
  * here. Never throws on unhealthy (the caller records it + pulls logs); only reports.
  */
 export async function assertHealthy(
-  projectDir: string,
   appUuid: string,
   url: string,
   healthPath: string,
@@ -91,7 +90,7 @@ export async function assertHealthy(
   let status = "none";
   while (Date.now() < statusDeadline) {
     try {
-      status = await getDeploymentStatus(projectDir, appUuid);
+      status = await getDeploymentStatus(appUuid);
     } catch (err) {
       return { healthy: false, detail: `deploy-health guard: status query failed: ${(err as Error).message}` };
     }

@@ -30,6 +30,9 @@ export const PROJECT_DIR = resolve(HERE, "..");
 /** Absolute path to config.json (project root, parent of shared/). */
 export const CONFIG_PATH = resolve(PROJECT_DIR, "config.json");
 
+/** Bundled assets shipped with the manager (e.g. deploy.sh copied into a project). */
+export const ASSETS_DIR = resolve(PROJECT_DIR, "assets");
+
 /** Central Coolify creds — the one VPS the manager deploys to. */
 export interface CoolifyConfig {
   base_url: string;
@@ -67,8 +70,6 @@ export interface Config {
   cloudflare: CloudflareConfig;
   registry: RegistryConfig;
   convex: ConvexConfig;
-  /** Where the deployment skill scripts live (coolify/, cloudflare/, coolify-setup/, astro-setup/). */
-  skillsDir: string;
   /** Optional model + thinking overrides for the manager session. */
   model?: string;
   thinking?: string;
@@ -134,7 +135,6 @@ function parseConfig(raw: unknown): Config {
       ghcr: typeof registry.ghcr === "string" && registry.ghcr.length > 0 ? registry.ghcr : "ghcr.io",
     },
     convex: { deploy_key: reqStr(convex, "convex", "deploy_key") },
-    skillsDir: expandTilde(reqStr(r, "config", "skills_dir")),
     model: optStr(r, "model"),
     thinking: optStr(r, "thinking"),
   };
@@ -204,9 +204,6 @@ export function getRegistry(): RegistryConfig {
 }
 export function getConvex(): ConvexConfig {
   return loadConfig().convex;
-}
-export function getSkillsDir(): string {
-  return loadConfig().skillsDir;
 }
 export function getModelConfig(): { model?: string; thinking?: string } {
   const c = loadConfig();

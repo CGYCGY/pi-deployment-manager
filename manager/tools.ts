@@ -9,13 +9,13 @@
 // (via the engine modules); the LLM never reaches the underlying bash. Verbs MUTATE the
 // ledger (the door builds the client result from it); they never return prose to parse.
 
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { getCloudflare, getConvex, getRegistry, getSkillsDir, getStateDir } from "../shared/config.ts";
+import { ASSETS_DIR, getCloudflare, getConvex, getRegistry } from "../shared/config.ts";
 import type { Logger } from "../shared/log.ts";
 import { assertWritable, safeDeployPath } from "../shared/sandbox.ts";
 import type { CurrentDeploy } from "../shared/types.ts";
@@ -34,7 +34,7 @@ import {
 import { ensureGitignored, readEnvDeploy, writeEnvDeploy } from "./envdeploy.ts";
 import { assertHealthy, assertSubdomainFree, assertTargetsOurApp } from "./guards.ts";
 import { detectAddons, detectProfile, getProfile } from "./profiles/index.ts";
-import { runCommand } from "./skills.ts";
+import { runCommand } from "./subprocess.ts";
 
 export interface ManagerToolDeps {
   roleLog: Logger;
@@ -157,10 +157,10 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
         written.push(`deploy/${rel}`);
       }
 
-      // deploy.sh is the shared skill engine (build -> GHCR push -> Coolify webhook); copy
-      // it in so the project owns its deploy command, exactly as coolify-setup does.
+      // deploy.sh (bundled asset) is the one real build step: docker build -> GHCR push ->
+      // Coolify webhook. Copy it in so the project owns its deploy command.
       const deployShDst = assertWritable(d.project_dir, "deploy/deploy.sh");
-      copyFileSync(join(getSkillsDir(), "coolify-setup/assets/deploy.sh"), deployShDst);
+      copyFileSync(join(ASSETS_DIR, "deploy.sh"), deployShDst);
       chmodSync(deployShDst, 0o755);
       written.push("deploy/deploy.sh");
 
@@ -248,7 +248,7 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
 
       const repoName = repoSlug(d.project_dir);
       const projectName = `pi-${reg.github_org}`.toLowerCase();
-      const projectUuid = await findOrCreateProject(d.project_dir, projectName);
+      const projectUuid = await findOrCreateProject(projectName);
       const image = `${reg.ghcr}/${reg.github_org}/${repoName}`.toLowerCase();
 
       const addons = await detectAddons(d.project_dir);
@@ -257,7 +257,7 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
       // each project's volume distinct.
       const persistentStorages = sqlite?.volumeSpec ? `${d.subdomain}-${sqlite.volumeSpec}` : undefined;
 
-      const appUuid = await createApp(d.project_dir, {
+      const { uuid: appUuid, webhookUrl } = await createApp({
         projectUuid,
         name: d.subdomain,
         image,
@@ -265,9 +265,9 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
         persistentStorages,
         instantDeploy: false, // image not pushed yet — deploy ships it.
       });
-      // create-app.sh appended APP_UUID + WEBHOOK_URL to deploy/.env.deploy; normalize the
-      // file (preserving them) so DOMAIN/SUBDOMAIN/creds stay consistent.
-      writeEnvDeploy(d.project_dir, { repoName, subdomain: d.subdomain });
+      // Persist the new app uuid + deploy webhook into deploy/.env.deploy so deploy.sh can
+      // trigger the deployment (it sources COOLIFY_WEBHOOK_URL from there).
+      writeEnvDeploy(d.project_dir, { repoName, subdomain: d.subdomain, appUuid, webhookUrl });
 
       d.ledger.app_uuid = appUuid;
       d.scratch.appUuid = appUuid;
@@ -316,21 +316,9 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
       }
       if (!pairs.length) return ok("env: nothing to set (no caller vars, no Convex URL).", { set: 0 });
 
-      // set-envs.sh REPLACES the app's env set, so this is an initial-flow step. Write the
-      // KEY=VALUE file to the manager's OWN state dir (never the project) so caller secrets
-      // can't be staged into the repo, then remove it.
-      const envFile = join(getStateDir(), `envset-${appUuid}.tmp`);
-      mkdirSync(getStateDir(), { recursive: true });
-      writeFileSync(envFile, `${pairs.map(([k, v]) => `${k}=${v}`).join("\n")}\n`, "utf8");
-      try {
-        await setEnvs(d.project_dir, appUuid, envFile);
-      } finally {
-        try {
-          unlinkSync(envFile);
-        } catch {
-          /* best-effort cleanup */
-        }
-      }
+      // Coolify's bulk endpoint REPLACES the app's env set (initial-flow step). Sent over
+      // the API directly — caller secrets never touch disk.
+      await setEnvs(appUuid, pairs);
       d.ledger.phase = "env-set";
       return ok(`Set ${pairs.length} env var(s) on app ${appUuid}: ${pairs.map(([k]) => k).join(", ")}.`, {
         keys: pairs.map(([k]) => k),
@@ -364,9 +352,9 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
       }
       assertTargetsOurApp(d.project_dir, appUuid);
 
-      const ip = await getServerIp(d.project_dir);
-      await createRecord(d.project_dir, "A", fqdn, ip, "true"); // proxied through Cloudflare
-      await updateAppDomain(d.project_dir, appUuid, url);
+      const ip = await getServerIp();
+      await createRecord("A", fqdn, ip, "true"); // proxied through Cloudflare
+      await updateAppDomain(appUuid, url);
       writeEnvDeploy(d.project_dir, { domain: fqdn, subdomain: d.subdomain });
 
       d.ledger.url = url;
@@ -413,10 +401,10 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
 
       const profile = d.ledger.profile ? getProfile(d.ledger.profile) : undefined;
       const url = d.ledger.url ?? `https://${d.subdomain}.${getCloudflare().zone_name}`;
-      const health = await assertHealthy(d.project_dir, appUuid, url, profile?.healthPath ?? "/");
+      const health = await assertHealthy(appUuid, url, profile?.healthPath ?? "/");
       d.ledger.url = url;
       d.ledger.health = health.healthy ? "healthy" : "unhealthy";
-      if (!health.healthy) d.ledger.logs_tail = await getAppLogs(d.project_dir, appUuid).catch(() => "");
+      if (!health.healthy) d.ledger.logs_tail = await getAppLogs(appUuid).catch(() => "");
 
       // Stage (NOT commit) the deploy files — the project agent owns the commit. .env.deploy
       // is gitignored, so `git add deploy` skips the secrets.
@@ -458,10 +446,10 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
       const env = readEnvDeploy(d.project_dir);
       const profile = d.ledger.profile ? getProfile(d.ledger.profile) : undefined;
       const url = d.ledger.url ?? (env.DOMAIN ? `https://${env.DOMAIN}` : `https://${d.subdomain}.${getCloudflare().zone_name}`);
-      const health = await assertHealthy(d.project_dir, appUuid, url, profile?.healthPath ?? "/");
+      const health = await assertHealthy(appUuid, url, profile?.healthPath ?? "/");
       d.ledger.url = url;
       d.ledger.health = health.healthy ? "healthy" : "unhealthy";
-      if (!health.healthy) d.ledger.logs_tail = await getAppLogs(d.project_dir, appUuid).catch(() => "");
+      if (!health.healthy) d.ledger.logs_tail = await getAppLogs(appUuid).catch(() => "");
 
       d.ledger.phase = health.healthy ? "redeployed" : "unhealthy";
       return ok(
@@ -484,7 +472,7 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
       const d = need("status");
       const appUuid = appUuidFor(d);
       if (!appUuid) throw new Error("status: no app for this project yet.");
-      const status = await getDeploymentStatus(d.project_dir, appUuid);
+      const status = await getDeploymentStatus(appUuid);
       return ok(`Coolify deployment status: ${status}.`, { status });
     },
   });
@@ -504,7 +492,7 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
       const d = need("logs");
       const appUuid = appUuidFor(d);
       if (!appUuid) throw new Error("logs: no app for this project yet.");
-      const text = await getAppLogs(d.project_dir, appUuid, (params as { lines?: number }).lines ?? 100);
+      const text = await getAppLogs(appUuid, (params as { lines?: number }).lines ?? 100);
       return ok(text || "(no logs returned / Coolify logging API unavailable)", {});
     },
   });

@@ -4,9 +4,6 @@
   "stateDir": "~/.pi-deployment-manager",
   "_stateDir_note": "Where the manager writes its logs (<stateDir>/logs/manager.log).",
 
-  "skills_dir": "/mnt/wsl/__data/project/private/pi-projects/.claude/skills",
-  "_skills_dir_note": "Where the deployment skill scripts live. Must contain sibling dirs coolify/, coolify-setup/, cloudflare/, astro-setup/ — they cross-reference by relative path, so keep the layout intact. These scripts are the engine the verbs' CODE calls; the LLM never invokes them.",
-
   "rpc": {
     "port": 7200,
     "_port_note": "Localhost RPC door. Auto-falls-back to the next free port if busy.",

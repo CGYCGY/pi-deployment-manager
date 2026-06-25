@@ -1,7 +1,9 @@
 // The cred-injection seam (DESIGN §5.1): central creds live ONLY in the manager's
 // config; here they are written into the project's gitignored deploy/.env.deploy at
-// deploy time so the skill scripts (which source it from cwd) can authenticate, and
-// the project itself never carries secrets. Every path goes through the sandbox.
+// deploy time so the bundled deploy.sh (docker build/push + Coolify webhook) can
+// authenticate, and the project itself never carries secrets. The manager's own API
+// calls read creds from config directly — this file exists only for deploy.sh. Every
+// path goes through the sandbox.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -27,7 +29,7 @@ function parseEnv(text: string): Record<string, string> {
     if (eq <= 0) continue;
     const key = line.slice(0, eq).trim();
     let val = line.slice(eq + 1).trim();
-    // create-app.sh writes COOLIFY_WEBHOOK_URL quoted; strip one quote layer.
+    // writeEnvDeploy writes COOLIFY_WEBHOOK_URL quoted; strip one quote layer.
     if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
       val = val.slice(1, -1);
     }
@@ -45,9 +47,9 @@ export function readEnvDeploy(projectDir: string): Record<string, string> {
 
 /**
  * (Re)write deploy/.env.deploy from central config + the passed project fields,
- * PRESERVING any COOLIFY_APP_UUID / COOLIFY_WEBHOOK_URL the skill scripts already
- * wrote (create-app.sh appends them as a side effect — clobbering would orphan the
- * provisioned app). Returns the absolute path. The file is gitignored; never committed.
+ * PRESERVING any COOLIFY_APP_UUID / COOLIFY_WEBHOOK_URL already on disk (provision writes
+ * them; later rewrites for DOMAIN/SUBDOMAIN must not clobber them or the app is orphaned).
+ * Returns the absolute path. The file is gitignored; never committed.
  */
 export function writeEnvDeploy(projectDir: string, fields: EnvDeployFields = {}): string {
   const existing = readEnvDeploy(projectDir);
@@ -75,7 +77,7 @@ export function writeEnvDeploy(projectDir: string, fields: EnvDeployFields = {})
     `COOLIFY_SERVER_UUID=${coolify.server_uuid}`,
     `COOLIFY_DEST_UUID=${coolify.dest_uuid}`,
     "",
-    "# Coolify app (written by create-app.sh; preserved across rewrites)",
+    "# Coolify app (written by provision; preserved across rewrites)",
     `COOLIFY_APP_UUID=${appUuid}`,
     `COOLIFY_WEBHOOK_URL="${webhookUrl}"`,
     "",

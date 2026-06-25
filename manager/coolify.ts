@@ -1,26 +1,53 @@
-// Typed wrappers over the coolify skill scripts (mutations) + direct Coolify API
-// reads (idempotency / collision checks the scripts don't cover). The verb CODE calls
-// these; the LLM never does. Mutations run the scripts with cwd=project_dir so they
-// source deploy/.env.deploy, and also receive the central creds via env.
+// Native Coolify API client (HTTP only, no subprocess). The verb CODE calls these; the
+// LLM never does. Everything authenticates from the manager's central config — the
+// project's deploy/.env.deploy is consumed ONLY by the vendored deploy.sh (docker
+// build/push + webhook trigger), never by these reads/writes.
 
 import { getCoolify } from "../shared/config.ts";
-import { runCommand, runSkill, SkillError, skillScript } from "./skills.ts";
 
-const TOOLS = "coolify/tools";
+const API_PREFIX = "/api/v1";
 
-/** Central Coolify creds for every skill call (belt-and-braces with deploy/.env.deploy). */
-function coolifyEnv(): Record<string, string> {
-  const c = getCoolify();
-  return {
-    COOLIFY_BASE_URL: c.base_url,
-    COOLIFY_API_TOKEN: c.api_token,
-    COOLIFY_SERVER_UUID: c.server_uuid,
-    COOLIFY_DEST_UUID: c.dest_uuid,
-  };
+interface CoolifyFetchOpts {
+  method?: string;
+  body?: unknown;
 }
 
-export async function createProject(projectDir: string, name: string): Promise<string> {
-  return runSkill(`${TOOLS}/create-project.sh`, [name], { cwd: projectDir, env: coolifyEnv() });
+/** One fetch against the Coolify API with the central bearer token; never throws on HTTP status. */
+async function coolifyFetch(path: string, opts: CoolifyFetchOpts = {}): Promise<Response> {
+  const c = getCoolify();
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${c.api_token}`,
+    Accept: "application/json",
+  };
+  if (opts.body !== undefined) headers["Content-Type"] = "application/json";
+  return fetch(`${c.base_url}${API_PREFIX}${path}`, {
+    method: opts.method ?? "GET",
+    headers,
+    body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+  });
+}
+
+/** Coolify API call returning parsed JSON; throws on non-2xx (fail closed). */
+async function coolifyApi(path: string, opts: CoolifyFetchOpts = {}): Promise<unknown> {
+  const res = await coolifyFetch(path, opts);
+  if (!res.ok) {
+    const detail = (await res.text().catch(() => "")).slice(0, 500);
+    throw new Error(
+      `Coolify API ${opts.method ?? "GET"} ${path} -> HTTP ${res.status} ${res.statusText}${detail ? `: ${detail}` : ""}`,
+    );
+  }
+  return res.json();
+}
+
+// ── Mutations (the write path) ──────────────────────────────────────────────────
+
+export async function createProject(name: string): Promise<string> {
+  const data = (await coolifyApi("/projects", {
+    method: "POST",
+    body: { name, description: "Created by pi-deployment-manager" },
+  })) as { uuid?: string };
+  if (!data.uuid) throw new Error(`createProject: Coolify returned no uuid for "${name}".`);
+  return data.uuid;
 }
 
 export interface CreateAppOpts {
@@ -29,73 +56,131 @@ export interface CreateAppOpts {
   /** Full image ref, e.g. ghcr.io/<org>/<repo>. */
   image: string;
   exposedPort?: number;
+  tag?: string;
   portsMappings?: string;
   /** "name:/mount[,name2:/mount2]" — persistent Coolify volumes (sqlite-volume addon). */
   persistentStorages?: string;
   instantDeploy?: boolean;
 }
 
+export interface CreatedApp {
+  uuid: string;
+  /** Deploy webhook the project's deploy.sh curls to trigger a redeploy. */
+  webhookUrl: string;
+}
+
 /**
- * Create the Coolify app. Side effect (in create-app.sh): appends COOLIFY_APP_UUID +
- * COOLIFY_WEBHOOK_URL to deploy/.env.deploy — so deploy/.env.deploy MUST already exist
- * (call writeEnvDeploy first). Returns the new app uuid.
+ * Create the Coolify app from a registry image and return its uuid + deploy webhook.
+ * The caller writes both into deploy/.env.deploy (via writeEnvDeploy) so deploy.sh can
+ * trigger the deployment. Persistent-volume attach is best-effort (a failed attach warns
+ * but does not abort the provision), matching the prior behaviour.
  */
-export async function createApp(projectDir: string, opts: CreateAppOpts): Promise<string> {
-  const env = coolifyEnv();
-  if (opts.exposedPort != null) env.EXPOSED_PORT = String(opts.exposedPort);
-  if (opts.portsMappings) env.PORTS_MAPPINGS = opts.portsMappings;
-  if (opts.persistentStorages) env.PERSISTENT_STORAGES = opts.persistentStorages;
-  env.INSTANT_DEPLOY = String(opts.instantDeploy ?? true);
-  return runSkill(`${TOOLS}/create-app.sh`, [opts.projectUuid, opts.name, opts.image], {
-    cwd: projectDir,
-    env,
-  });
+export async function createApp(opts: CreateAppOpts): Promise<CreatedApp> {
+  const c = getCoolify();
+
+  // Coolify needs the target environment's NAME; use the project's first env, else "production".
+  let envName = "production";
+  try {
+    const envs = (await coolifyApi(`/projects/${opts.projectUuid}/environments`)) as Array<{ name?: string }>;
+    if (Array.isArray(envs) && envs[0]?.name) envName = envs[0].name;
+  } catch {
+    /* fall back to "production" */
+  }
+
+  const body: Record<string, unknown> = {
+    server_uuid: c.server_uuid,
+    project_uuid: opts.projectUuid,
+    environment_name: envName,
+    destination_uuid: c.dest_uuid,
+    name: opts.name,
+    docker_registry_image_name: opts.image,
+    docker_registry_image_tag: opts.tag ?? "latest",
+    ports_exposes: String(opts.exposedPort ?? 80),
+    instant_deploy: opts.instantDeploy ?? true,
+  };
+  if (opts.portsMappings) body.ports_mappings = opts.portsMappings;
+
+  const created = (await coolifyApi("/applications/dockerimage", { method: "POST", body })) as { uuid?: string };
+  if (!created.uuid) throw new Error(`createApp: Coolify returned no app uuid for "${opts.name}".`);
+  const uuid = created.uuid;
+
+  if (opts.persistentStorages) {
+    for (const entry of opts.persistentStorages.split(",")) {
+      const i = entry.indexOf(":");
+      if (i <= 0) continue;
+      const name = entry.slice(0, i).trim();
+      const mount = entry.slice(i + 1).trim();
+      if (!name || !mount) continue;
+      try {
+        await coolifyApi(`/applications/${uuid}/storages`, {
+          method: "POST",
+          body: { type: "persistent", name, mount_path: mount },
+        });
+      } catch (err) {
+        console.error(`createApp: could not attach storage "${name}:${mount}" (${(err as Error).message}); continuing.`);
+      }
+    }
+  }
+
+  return { uuid, webhookUrl: `${c.base_url}${API_PREFIX}/deploy?uuid=${uuid}&force=false` };
 }
 
-/** Set the app's env vars from a KEY=VALUE file (replaces the app's env set, not additive). */
-export async function setEnvs(projectDir: string, appUuid: string, envFilePath: string): Promise<void> {
-  await runSkill(`${TOOLS}/set-envs.sh`, [appUuid, envFilePath], { cwd: projectDir, env: coolifyEnv() });
+/** Replace the app's env var set (Coolify's bulk endpoint overwrites, it is not additive). */
+export async function setEnvs(appUuid: string, vars: Array<[string, string]>): Promise<void> {
+  if (!vars.length) return;
+  const data = vars.map(([key, value]) => ({ key, value, is_preview: false, is_build_time: false }));
+  await coolifyApi(`/applications/${appUuid}/envs/bulk`, { method: "POST", body: { data } });
 }
 
-export async function updateAppDomain(projectDir: string, appUuid: string, fqdn: string): Promise<void> {
-  await runSkill(`${TOOLS}/update-app-domain.sh`, [appUuid, fqdn], { cwd: projectDir, env: coolifyEnv() });
+export async function updateAppDomain(appUuid: string, fqdn: string): Promise<void> {
+  await coolifyApi(`/applications/${appUuid}`, { method: "PATCH", body: { domains: fqdn } });
 }
+
+// ── Reads ────────────────────────────────────────────────────────────────────────
 
 /** Latest deployment status: "queued" | "in_progress" | "finished" | "failed" | "none". */
-export async function getDeploymentStatus(projectDir: string, appUuid: string): Promise<string> {
-  return runSkill(`${TOOLS}/get-deployment-status.sh`, [appUuid], { cwd: projectDir, env: coolifyEnv() });
+export async function getDeploymentStatus(appUuid: string): Promise<string> {
+  const data = await coolifyApi(`/deployments/applications/${appUuid}?take=1`);
+  if (!Array.isArray(data) || data.length === 0) return "none";
+  const status = (data[0] as { status?: string }).status;
+  if (!status) throw new Error(`getDeploymentStatus: malformed deployment response for ${appUuid}.`);
+  return status;
 }
 
-export async function getAppLogs(projectDir: string, appUuid: string, lines = 100): Promise<string> {
-  // exit 2 = Coolify logging API unavailable. Logs are diagnostic only, so a missing
-  // logging API must NOT fail the deploy — handle the code instead of throwing.
-  const r = await runCommand("bash", [skillScript(`${TOOLS}/get-app-logs.sh`), appUuid, String(lines)], {
-    cwd: projectDir,
-    env: coolifyEnv(),
-  });
-  if (r.code === 0) return r.stdout.trimEnd();
-  if (r.code === 2) return "";
-  throw new SkillError(`${TOOLS}/get-app-logs.sh`, r.code, r.stderr.trim());
-}
+export async function getAppLogs(appUuid: string, lines = 100): Promise<string> {
+  // Logs are diagnostic only: a Coolify instance without a logging API must NOT fail a
+  // deploy, so an "unsupported/unavailable" response returns "" rather than throwing.
+  const res = await coolifyFetch(`/applications/${appUuid}/logs?lines=${lines}`);
+  const text = await res.text();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    parsed = undefined;
+  }
 
-// ── Live reads (idempotency + subdomain-collision guard) ────────────────────────
+  if (res.ok) {
+    if (parsed && typeof parsed === "object" && "logs" in parsed) {
+      return String((parsed as { logs: unknown }).logs ?? "");
+    }
+    if (typeof parsed === "string") return parsed;
+    return text.trim();
+  }
+
+  const msg =
+    parsed && typeof parsed === "object" && "message" in parsed
+      ? String((parsed as { message: unknown }).message ?? "")
+      : "";
+  if (/not support|unavailable/i.test(msg)) return ""; // logging API absent — non-fatal
+  if (/not found|does not exist/i.test(msg)) throw new Error(`getAppLogs: application ${appUuid} not found.`);
+  throw new Error(`getAppLogs: HTTP ${res.status}${msg ? `: ${msg}` : ""}.`);
+}
 
 export interface CoolifyApp {
   uuid: string;
   name: string;
   /** Coolify stores domains as a comma-separated string (may include scheme); null if unset. */
   fqdn: string | null;
-}
-
-async function coolifyApi(path: string): Promise<unknown> {
-  const c = getCoolify();
-  const res = await fetch(`${c.base_url}/api/v1${path}`, {
-    headers: { Authorization: `Bearer ${c.api_token}`, Accept: "application/json" },
-  });
-  if (!res.ok) {
-    throw new Error(`Coolify API ${path} -> HTTP ${res.status} ${res.statusText}`);
-  }
-  return res.json();
 }
 
 /** All applications on the server — the live source of truth for what subdomains exist. */
@@ -141,25 +226,25 @@ export async function listProjects(): Promise<CoolifyProject[]> {
  * reused project. Fails loud if the project list can't be read — creating blindly would
  * spawn a duplicate project on every deploy.
  */
-export async function findOrCreateProject(projectDir: string, name: string): Promise<string> {
+export async function findOrCreateProject(name: string): Promise<string> {
   const existing = (await listProjects()).find((p) => p.name === name && p.uuid);
   if (existing) return existing.uuid;
-  return createProject(projectDir, name);
+  return createProject(name);
 }
 
 /**
  * Public IP of the configured Coolify server — the A-record target for a project's
- * subdomain. Parsed from list-servers.sh (`uuid|name|ip`) rather than guessing the API
- * shape, matching the configured server_uuid.
+ * subdomain, matched by the configured server_uuid.
  */
-export async function getServerIp(projectDir: string): Promise<string> {
-  const out = await runSkill(`${TOOLS}/list-servers.sh`, [], { cwd: projectDir, env: coolifyEnv() });
+export async function getServerIp(): Promise<string> {
   const { server_uuid } = getCoolify();
-  for (const line of out.split("\n")) {
-    const [uuid, , ip] = line.trim().split("|");
-    if (uuid === server_uuid) {
-      if (!ip) throw new Error(`getServerIp: server ${server_uuid} has no IP in the Coolify servers list.`);
-      return ip;
+  const data = await coolifyApi("/servers");
+  if (!Array.isArray(data)) throw new Error("getServerIp: unexpected /servers response.");
+  for (const s of data) {
+    const srv = s as { uuid?: string; ip?: string };
+    if (srv.uuid === server_uuid) {
+      if (!srv.ip) throw new Error(`getServerIp: server ${server_uuid} has no IP in the Coolify servers list.`);
+      return srv.ip;
     }
   }
   throw new Error(`getServerIp: server ${server_uuid} not found in the Coolify servers list.`);
