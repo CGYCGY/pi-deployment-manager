@@ -1,0 +1,47 @@
+{
+  "_about": "Single source of truth for pi-deployment-manager. Copy to config.json (gitignored) and fill in. This is the ONLY place deployment creds live — the manager writes them into each project's gitignored deploy/.env.deploy at deploy time and NEVER commits them, so your projects stop carrying secrets.",
+
+  "stateDir": "~/.pi-deployment-manager",
+  "_stateDir_note": "Where the manager writes its logs (<stateDir>/logs/manager.log).",
+
+  "skills_dir": "/mnt/wsl/__data/project/private/pi-projects/.claude/skills",
+  "_skills_dir_note": "Where the deployment skill scripts live. Must contain sibling dirs coolify/, coolify-setup/, cloudflare/, astro-setup/ — they cross-reference by relative path, so keep the layout intact. These scripts are the engine the verbs' CODE calls; the LLM never invokes them.",
+
+  "rpc": {
+    "port": 7200,
+    "_port_note": "Localhost RPC door. Auto-falls-back to the next free port if busy.",
+    "token": "CHANGE-ME-pideploy-shared-secret-7b3e1c"
+  },
+  "_rpc_token_note": "Shared bearer secret checked on every POST /deploy. Change before any non-local use.",
+
+  "coolify": {
+    "_note": "The one Coolify VPS every project deploys to.",
+    "base_url": "https://coolify.example.com",
+    "api_token": "CHANGE-ME-coolify-api-token",
+    "server_uuid": "CHANGE-ME-coolify-server-uuid",
+    "dest_uuid": "CHANGE-ME-coolify-destination-uuid"
+  },
+
+  "cloudflare": {
+    "_note": "The one Cloudflare zone/domain; every project becomes a subdomain on it.",
+    "api_token": "CHANGE-ME-cloudflare-token-dns-edit",
+    "zone_id": "CHANGE-ME-cloudflare-zone-id",
+    "zone_name": "example.com"
+  },
+
+  "registry": {
+    "_note": "Where built images are pushed: <ghcr>/<github_org>/<repo>.",
+    "github_org": "your-github-org",
+    "ghcr": "ghcr.io"
+  },
+
+  "convex": {
+    "_note": "Convex Cloud (managed, not self-hosted) deploy key. Used backend-first: convex deploy -> capture prod URL -> inject as build-time env into the frontend.",
+    "deploy_key": "CHANGE-ME-convex-deploy-key"
+  },
+
+  "model": "",
+  "_model_note": "Optional model override for the manager session (empty = pi default).",
+  "thinking": "",
+  "_thinking_note": "Optional thinking tier (empty = pi default)."
+}

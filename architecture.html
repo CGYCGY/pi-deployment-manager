@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>pi-deployment-manager — Architecture</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2330; --line:#30363d;
+    --ink:#e6edf3; --dim:#9aa7b4; --faint:#6e7b8a;
+    --accent:#58a6ff; --green:#3fb950; --amber:#d29922; --red:#f85149;
+    --purple:#bc8cff; --teal:#39c5cf; --pink:#f778ba;
+    --radius:12px; --mono:"SF Mono",ui-monospace,"Cascadia Code",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;background:radial-gradient(1200px 600px at 70% -10%,#16202e 0,var(--bg) 55%);
+    color:var(--ink);font-family:ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.55;-webkit-font-smoothing:antialiased;padding:0 0 80px;
+  }
+  .wrap{max-width:1140px;margin:0 auto;padding:0 24px}
+  header.hero{padding:54px 0 28px;border-bottom:1px solid var(--line);margin-bottom:36px}
+  .tag{display:inline-block;font:600 11px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;
+    color:var(--green);border:1px solid #21402b;background:#0f2014;padding:6px 10px;border-radius:999px}
+  h1{font-size:34px;margin:16px 0 6px;letter-spacing:-.02em}
+  h1 span{color:var(--accent)}
+  .sub{color:var(--dim);font-size:16px;max-width:760px}
+  .meta{margin-top:14px;color:var(--faint);font:500 13px/1.4 var(--mono)}
+
+  section{margin:46px 0}
+  h2{font-size:13px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);
+    margin:0 0 18px;display:flex;align-items:center;gap:10px}
+  h2::before{content:"";width:22px;height:2px;background:var(--accent);border-radius:2px}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius)}
+  .pad{padding:18px 20px}
+
+  /* topology */
+  .topo{display:grid;grid-template-columns:1fr auto 1fr;gap:0;align-items:stretch}
+  .node{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:18px 20px}
+  .node h3{margin:0 0 4px;font-size:16px}
+  .node .role{font:600 11px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--faint)}
+  .node p{margin:10px 0 0;color:var(--dim);font-size:13.5px}
+  .node.client{border-color:#27405e}
+  .node.client .role{color:var(--accent)}
+  .node.service{border-color:#3a2f57}
+  .node.service .role{color:var(--purple)}
+  .arrowcol{display:flex;flex-direction:column;justify-content:center;align-items:center;padding:0 18px;min-width:200px}
+  .rpc{font:600 12px/1.4 var(--mono);color:var(--ink);text-align:center}
+  .rpc small{color:var(--faint);font-weight:500}
+  .flowline{width:100%;height:2px;background:linear-gradient(90deg,var(--accent),var(--purple));position:relative;margin:8px 0}
+  .flowline::after{content:"▶";position:absolute;right:-2px;top:-9px;color:var(--purple);font-size:13px}
+  .backline{width:100%;height:2px;background:linear-gradient(90deg,var(--purple),var(--accent));position:relative;margin:8px 0;opacity:.55}
+  .backline::before{content:"◀";position:absolute;left:-2px;top:-9px;color:var(--accent);font-size:13px}
+
+  .truth{margin-top:18px;display:flex;gap:14px;align-items:center;justify-content:center;
+    border:1px dashed #3a4250;border-radius:var(--radius);padding:14px 18px;background:#10151d}
+  .truth b{color:var(--teal)}
+  .truth .pill{font:600 12px var(--mono);color:var(--ink);background:#13202a;border:1px solid #1f3b44;padding:6px 12px;border-radius:8px}
+  .truth .small{color:var(--faint);font-size:12.5px}
+
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+
+  /* flows */
+  .flow h4{margin:0 0 14px;font-size:15px;display:flex;align-items:center;gap:9px}
+  .badge{font:600 10px/1 var(--mono);letter-spacing:.06em;padding:5px 8px;border-radius:6px;text-transform:uppercase}
+  .badge.init{color:var(--green);background:#0f2014;border:1px solid #21402b}
+  .badge.upd{color:var(--amber);background:#211a08;border:1px solid #463711}
+  ol.steps{list-style:none;margin:0;padding:0;counter-reset:s}
+  ol.steps li{counter-increment:s;position:relative;padding:8px 0 8px 38px;font-size:13.5px;color:var(--dim);border-top:1px solid #21262d}
+  ol.steps li:first-child{border-top:0}
+  ol.steps li::before{content:counter(s);position:absolute;left:0;top:7px;width:24px;height:24px;border-radius:7px;
+    background:var(--panel2);border:1px solid var(--line);color:var(--ink);font:600 12px var(--mono);
+    display:flex;align-items:center;justify-content:center}
+  ol.steps li b{color:var(--ink);font-weight:600}
+  ol.steps li .g{color:var(--red);font:600 11px var(--mono)}
+
+  /* profiles */
+  .ptable{width:100%;border-collapse:collapse;font-size:13.5px}
+  .ptable th{text-align:left;color:var(--faint);font:600 11px var(--mono);letter-spacing:.06em;text-transform:uppercase;
+    padding:10px 12px;border-bottom:1px solid var(--line)}
+  .ptable td{padding:11px 12px;border-bottom:1px solid #21262d;color:var(--dim);vertical-align:top}
+  .ptable td:first-child{font:600 13px var(--mono)}
+  .ptable tr:last-child td{border-bottom:0}
+  .chip{display:inline-block;font:600 11px var(--mono);padding:3px 8px;border-radius:6px;margin:0 2px 0 0}
+  .chip.fe{color:var(--accent);background:#0d2036;border:1px solid #1d3a5c}
+  .chip.be{color:var(--pink);background:#2a1320;border:1px solid #4a2138}
+  .chip.def{color:var(--green);background:#0f2014;border:1px solid #21402b}
+  .compose{margin-top:14px;text-align:center;color:var(--dim);font-size:13px}
+  .compose code{font:600 12.5px var(--mono);color:var(--ink)}
+
+  /* verbs */
+  .verbs{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+  .verb{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;text-align:center}
+  .verb .v{font:600 13px var(--mono);color:var(--ink)}
+  .verb .rw{font:600 9px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;margin-top:7px;display:inline-block;
+    padding:3px 7px;border-radius:5px}
+  .verb .rw.read{color:var(--teal);background:#10202400;border:1px solid #1f3b44}
+  .verb .rw.write{color:var(--amber);background:#211a0800;border:1px solid #463711}
+  .verb p{margin:8px 0 0;font-size:11.5px;color:var(--faint)}
+
+  /* guards */
+  .guard{display:flex;gap:14px;align-items:flex-start;padding:16px;border:1px solid #4a2138;background:#1a1015;border-radius:var(--radius)}
+  .guard .ic{font-size:20px;line-height:1}
+  .guard h4{margin:0 0 5px;font-size:14px;color:var(--ink)}
+  .guard p{margin:0;font-size:12.5px;color:var(--dim)}
+
+  /* decisions */
+  .dec{display:grid;grid-template-columns:170px 1fr;gap:0;border-top:1px solid #21262d}
+  .dec:first-child{border-top:0}
+  .dec dt{padding:12px 0;font:600 12px var(--mono);color:var(--accent)}
+  .dec dd{padding:12px 0;margin:0;color:var(--dim);font-size:13.5px}
+  .dec dd b{color:var(--ink);font-weight:600}
+
+  .legend{display:flex;gap:18px;flex-wrap:wrap;margin-top:10px;color:var(--faint);font-size:12px}
+  .legend span{display:flex;align-items:center;gap:6px}
+  .dot{width:9px;height:9px;border-radius:3px;display:inline-block}
+
+  .note{color:var(--faint);font-size:12.5px;margin-top:10px;font-style:italic}
+  @media (max-width:880px){
+    .grid2,.grid3,.topo{grid-template-columns:1fr}
+    .verbs{grid-template-columns:repeat(2,1fr)}
+    .arrowcol{padding:18px 0}
+    .dec{grid-template-columns:1fr}
+    .dec dt{padding-bottom:0}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <span class="tag">● Design locked · pre-implementation</span>
+    <h1><span>pi-deployment-manager</span> — architecture</h1>
+    <p class="sub">A standalone agentic <b>deployment service</b> on pi. Any project's agent hands off
+      a deploy over RPC; the manager owns all deployment knowledge, creds, and infra state, does the
+      work, and returns a structured result.</p>
+    <div class="meta">sibling of pi-4b-tester · pi-e2e-tester &nbsp;·&nbsp; 2026-06-25 &nbsp;·&nbsp; realizes the pi-4b "expose hub via RPC" roadmap</div>
+  </header>
+
+  <!-- TOPOLOGY -->
+  <section>
+    <h2>1 · Topology — service, not device-driver</h2>
+    <div class="topo">
+      <div class="node client">
+        <div class="role">Client</div>
+        <h3>Any project agent</h3>
+        <p>Next.js / React / HTML / Astro repo. Carries <b>zero</b> deployment knowledge or secrets.
+           Just sends the task.</p>
+      </div>
+
+      <div class="arrowcol">
+        <div class="rpc">POST /deploy<br><small>localhost HTTP · bearer token · requestId</small></div>
+        <div class="flowline"></div>
+        <div class="rpc"><small>{ project_dir, subdomain, intent }</small></div>
+        <div class="backline"></div>
+        <div class="rpc"><small>{ status, url, health, … }</small></div>
+      </div>
+
+      <div class="node service">
+        <div class="role">Service · gated</div>
+        <h3>pi-deployment-manager</h3>
+        <p><b>Heavily gated:</b> no raw Bash/Edit/Read — only the 10 verbs. Wraps the 4 skill scripts,
+           all creds, the profile registry &amp; guards. <b>Spawn-on-demand</b>, runs <b>in place</b> on the repo.</p>
+      </div>
+    </div>
+
+    <div class="truth">
+      <span class="small">source of truth →</span>
+      <span class="pill">Coolify API</span>
+      <span class="pill">Cloudflare API</span>
+      <b>queried live</b>
+      <span class="small">— manager holds no persistent infra state → cold start loses nothing</span>
+    </div>
+    <p class="note">Unlike the testers (hub + a persistent phone/browser spoke), a deploy runs to completion and returns — so there is no internal device-spoke.</p>
+  </section>
+
+  <!-- FLOWS -->
+  <section>
+    <h2>2 · The two flows — one NL door, branch on idempotency signal</h2>
+    <div class="grid2">
+      <div class="card pad flow">
+        <h4><span class="badge init">Initial</span> first-time deploy</h4>
+        <p class="note" style="margin-top:0">trigger: no <code style="font-family:var(--mono)">COOLIFY_WEBHOOK_URL</code> in deploy/.env.deploy</p>
+        <ol class="steps">
+          <li><b>detect</b> → pick frontend profile + backend addons</li>
+          <li><b>scaffold</b> deploy/Dockerfile (+ /healthz, HEALTHCHECK)</li>
+          <li><b>convex deploy</b> → capture prod URL <span class="note">(if convex)</span></li>
+          <li>populate deploy/.env.deploy from <b>central creds</b></li>
+          <li><b>provision</b> Coolify app + resource limits</li>
+          <li><b>env</b> — set vars, inject Convex URL (build-time)</li>
+          <li><span class="g">⛔ subdomain-collision guard</span></li>
+          <li><b>dns</b> — create record + set Coolify domain</li>
+          <li><b>deploy</b> — build → GHCR → Coolify webhook</li>
+          <li><span class="g">⛔ deploy-health guard</span> → return {url}</li>
+        </ol>
+      </div>
+
+      <div class="card pad flow">
+        <h4><span class="badge upd">Update</span> redeploy after change</h4>
+        <p class="note" style="margin-top:0">trigger: <code style="font-family:var(--mono)">COOLIFY_WEBHOOK_URL</code> present → API-only</p>
+        <ol class="steps">
+          <li><b>detect</b> → recognized as already set up</li>
+          <li><b>convex deploy</b> + re-inject URL <span class="note">(if backend changed)</span></li>
+          <li><b>redeploy</b> — re-run deploy.sh (build → GHCR → webhook)</li>
+          <li><span class="g">⛔ deploy-health guard</span> → return</li>
+        </ol>
+        <div style="margin-top:22px;border-top:1px dashed #30363d;padding-top:16px">
+          <h4 style="margin-bottom:8px">Image-based pipeline</h4>
+          <p style="color:var(--dim);font-size:13px;margin:0">
+            <code style="font-family:var(--mono);color:var(--ink)">deploy.sh</code> builds the Docker image →
+            pushes to <b>GHCR</b> (<code style="font-family:var(--mono)">ghcr.io/&lt;org&gt;/&lt;repo&gt;</code>) →
+            triggers the Coolify webhook, which pulls &amp; runs it.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- PROFILES -->
+  <section>
+    <h2>3 · DeployProfile registry — the DeviceProfile analog</h2>
+    <div class="card pad">
+      <table class="ptable">
+        <thead><tr><th>profile</th><th>kind</th><th>detect</th><th>output / runtime</th></tr></thead>
+        <tbody>
+          <tr><td>static-html</td><td><span class="chip fe">frontend</span></td><td>bare index.html, no build</td><td>nginx static</td></tr>
+          <tr><td>react-spa</td><td><span class="chip fe">frontend</span></td><td>vite / CRA, client-only</td><td>build → nginx</td></tr>
+          <tr><td>astro-static</td><td><span class="chip fe">frontend</span></td><td>astro.config, no SSR adapter</td><td>bun → nginx <span class="note">(exists)</span></td></tr>
+          <tr><td>nextjs-node</td><td><span class="chip fe">frontend</span> <span class="chip def">default</span></td><td>next dep, server / App-Router</td><td>node standalone</td></tr>
+          <tr><td>nextjs-static</td><td><span class="chip fe">frontend</span></td><td>next.config output:'export'</td><td>build → nginx</td></tr>
+          <tr><td>convex-cloud</td><td><span class="chip be">backend addon</span></td><td>convex/ dir + convex dep</td><td>backend-first: convex deploy → inject URL</td></tr>
+          <tr><td>sqlite-volume</td><td><span class="chip be">backend addon</span></td><td>server app + .db / sqlite dep</td><td>persistent Coolify volume</td></tr>
+        </tbody>
+      </table>
+      <div class="compose">project = <code>one frontend profile</code> + <code>optional backend addon(s)</code> &nbsp;·&nbsp; auto-detected &nbsp;·&nbsp; add a target = drop one file</div>
+      <div class="legend">
+        <span><span class="dot" style="background:var(--accent)"></span> frontend</span>
+        <span><span class="dot" style="background:var(--pink)"></span> backend addon</span>
+        <span><span class="dot" style="background:var(--green)"></span> default for Next.js</span>
+        <span>Convex = <b style="color:var(--ink)">Convex Cloud</b> (not self-hosted)</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- GATE -->
+  <section>
+    <h2>4 · The gate — a heavily-gated, single-purpose agent</h2>
+    <div class="grid2">
+      <div class="card pad">
+        <h4 style="margin:0 0 12px;font-size:15px">Skills aren't invoked by the LLM — they're the wrapped engine</h4>
+        <p style="color:var(--dim);font-size:13.5px;margin:0 0 14px">A skill is a prompt that tells an LLM to run bash — exactly the capability removed. So the skill scripts become the engine the <b style="color:var(--ink)">tool code</b> calls; the model only ever sees verbs.</p>
+        <div style="font:600 12px/1.8 var(--mono);color:var(--dim);background:#10151d;border:1px solid var(--line);border-radius:10px;padding:14px 16px">
+          <span style="color:var(--purple)">manager&nbsp;LLM</span> ──can&nbsp;only&nbsp;call──▶<br>
+          &nbsp;&nbsp;[ <span style="color:var(--accent)">detect · scaffold · provision · dns · deploy · …</span> ]<br>
+          &nbsp;&nbsp;&nbsp;&nbsp;│ <span style="color:var(--faint)">tool implementation (code)</span><br>
+          &nbsp;&nbsp;&nbsp;&nbsp;└─▶ coolify/tools/*.sh · cloudflare/tools/*.sh<br>
+          &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;deploy.sh · npx convex deploy · gh
+        </div>
+      </div>
+      <div class="card pad">
+        <h4 style="margin:0 0 12px;font-size:15px">The sandbox — enforced in tool code, not trusted to the LLM</h4>
+        <table class="ptable">
+          <tbody>
+            <tr><td style="color:var(--teal)">read</td><td>target <code style="font-family:var(--mono)">project_dir</code>, <b>read-only</b> — to detect the profile</td></tr>
+            <tr><td style="color:var(--amber)">write</td><td>allowlist: <code style="font-family:var(--mono)">deploy/*</code> + <code style="font-family:var(--mono)">.gitignore</code>/<code style="font-family:var(--mono)">.env.production</code> + git commit. nothing else</td></tr>
+            <tr><td style="color:var(--accent)">network</td><td>Coolify · Cloudflare · GHCR · Convex · GitHub APIs</td></tr>
+            <tr><td style="color:var(--red)">denied</td><td>general Bash · Edit · Read · Glob · Write outside allowlist</td></tr>
+          </tbody>
+        </table>
+        <p class="note" style="margin-top:10px">This allowlist <b>is</b> the "only touch deploy/, never other files" guarantee.</p>
+      </div>
+    </div>
+    <p class="note">1 purpose · 1 agent · 1 deploy at a time — the pi-e2e-tester spoke philosophy: a closed, semantic surface, not raw access.</p>
+  </section>
+
+  <!-- VERBS -->
+  <section>
+    <h2>5 · Verb surface — the manager's ONLY tools (read ≠ write)</h2>
+    <div class="verbs">
+      <div class="verb"><div class="v">detect</div><span class="rw read">read</span><p>pick profile + addons</p></div>
+      <div class="verb"><div class="v">scaffold</div><span class="rw write">write</span><p>gen Dockerfile</p></div>
+      <div class="verb"><div class="v">convex</div><span class="rw write">write</span><p>convex deploy → URL</p></div>
+      <div class="verb"><div class="v">provision</div><span class="rw write">write</span><p>create app + limits</p></div>
+      <div class="verb"><div class="v">env</div><span class="rw write">write</span><p>set app env vars</p></div>
+      <div class="verb"><div class="v">dns</div><span class="rw write">write</span><p>Cloudflare record</p></div>
+      <div class="verb"><div class="v">deploy</div><span class="rw write">write</span><p>build → GHCR → ship</p></div>
+      <div class="verb"><div class="v">redeploy</div><span class="rw write">write</span><p>API-only trigger</p></div>
+      <div class="verb"><div class="v">status</div><span class="rw read">read</span><p>deployment status</p></div>
+      <div class="verb"><div class="v">logs</div><span class="rw read">read</span><p>tail app logs</p></div>
+    </div>
+    <p class="note">read-only verbs (detect / status / logs) never mutate infra — the testers' durable "read ≠ send" lesson.</p>
+  </section>
+
+  <!-- GUARDS -->
+  <section>
+    <h2>6 · Guards — fail-closed, in code, not LLM judgment</h2>
+    <div class="grid3">
+      <div class="guard">
+        <div class="ic">⛔</div>
+        <div><h4>Subdomain-collision</h4><p>Caller specifies the subdomain. If it already maps to a <b style="color:var(--ink)">different</b> project on Cloudflare/Coolify → refuse. Never clobber.</p></div>
+      </div>
+      <div class="guard">
+        <div class="ic">🎯</div>
+        <div><h4>Wrong-target</h4><p>Every mutating Coolify/DNS call must target the app/record bound to <b style="color:var(--ink)">this</b> project (via deploy/.env.deploy UUID + domain).</p></div>
+      </div>
+      <div class="guard">
+        <div class="ic">❤️</div>
+        <div><h4>Deploy-health</h4><p>After ship, poll Coolify status + /healthz. Unhealthy → auto-<b style="color:var(--ink)">FAIL</b> the result. The crash-guard analog.</p></div>
+      </div>
+    </div>
+    <p class="note">One server + one domain ⇒ collisions are the top silent-failure mode — hence guards live in deterministic code, not the LLM.</p>
+  </section>
+
+  <!-- DECISIONS -->
+  <section>
+    <h2>7 · Locked decisions at a glance</h2>
+    <div class="card pad">
+      <dl style="margin:0">
+        <div class="dec"><dt>transport</dt><dd>Reuse pi-4b/e2e <b>localhost-HTTP RPC</b> (token + requestId). <code style="font-family:var(--mono);color:var(--faint)">pi -p</code> headless = fallback.</dd></div>
+        <div class="dec"><dt>lifecycle</dt><dd><b>Spawn-on-demand</b>, no daemon — deploys are infrequent; nothing to babysit.</dd></div>
+        <div class="dec"><dt>doors</dt><dd>NL <b>deploy(project_dir, subdomain, intent)</b> first. Deterministic typed door deferred.</dd></div>
+        <div class="dec"><dt>project access</dt><dd>Both modes, <b>operate in place</b> — no clone. Initial writes+commits; update is API-only.</dd></div>
+        <div class="dec"><dt>subdomain</dt><dd><b>Caller-specified</b> per deploy; collision-guarded against the single shared domain.</dd></div>
+        <div class="dec"><dt>gating</dt><dd><b>No raw Bash/Edit/Read</b> — only the 10 verbs. Read project / write-deploy allowlist, enforced in tool code.</dd></div>
+        <div class="dec"><dt>execution</dt><dd>The 4 skill scripts are the <b>wrapped engine</b> the tool code calls — never invoked by the LLM.</dd></div>
+        <div class="dec"><dt>creds</dt><dd><b>Centralized in the manager</b>; injected into each project's gitignored deploy/.env.deploy at deploy time, never committed.</dd></div>
+        <div class="dec"><dt>convex</dt><dd><b>Convex Cloud</b>, deployed first; prod URL injected as build-time env into the frontend.</dd></div>
+        <div class="dec"><dt>context reset</dt><dd><b>compact()</b> per deploy — each deploy is an isolated task; never reset mid-flow.</dd></div>
+        <div class="dec"><dt>stack reality</dt><dd>ONE Coolify VPS · ONE Cloudflare domain · every project = a subdomain on it.</dd></div>
+      </dl>
+    </div>
+    <p class="note">Open for build: per-framework Dockerfile templates beyond Astro · build host needs Docker+GHCR · SQLite backups · stream progress vs final-only.</p>
+  </section>
+
+</div>
+</body>
+</html>

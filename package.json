@@ -1,0 +1,20 @@
+{
+  "name": "pi-deployment-manager",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "Standalone agentic deployment service, built on pi. Project agents hand off a deploy via RPC; the manager owns deployment skills, creds, and infra-state and returns a structured result.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test shared/"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.78.1",
+    "@earendil-works/pi-tui": "^0.78.1",
+    "typebox": "1.1.38",
+    "@types/bun": "^1.3.14",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  }
+}
