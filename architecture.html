@@ -178,11 +178,11 @@
 
   <!-- FLOWS -->
   <section>
-    <h2>2 · The two flows — one NL door, branch on idempotency signal</h2>
+    <h2>2 · The two flows — one NL door, branch on live Coolify state</h2>
     <div class="grid2">
       <div class="card pad flow">
         <h4><span class="badge init">Initial</span> first-time deploy</h4>
-        <p class="note" style="margin-top:0">trigger: no <code style="font-family:var(--mono)">COOLIFY_WEBHOOK_URL</code> in deploy/.env.deploy</p>
+        <p class="note" style="margin-top:0">trigger: Coolify has no app for this project (live check; .env.deploy app-uuid is a hint)</p>
         <ol class="steps">
           <li><b>detect</b> → pick frontend profile + backend addons</li>
           <li><b>scaffold</b> deploy/Dockerfile (+ /healthz, HEALTHCHECK)</li>
@@ -199,7 +199,7 @@
 
       <div class="card pad flow">
         <h4><span class="badge upd">Update</span> redeploy after change</h4>
-        <p class="note" style="margin-top:0">trigger: <code style="font-family:var(--mono)">COOLIFY_WEBHOOK_URL</code> present → API-only</p>
+        <p class="note" style="margin-top:0">trigger: Coolify already has this app (live check) → API-only</p>
         <ol class="steps">
           <li><b>detect</b> → recognized as already set up</li>
           <li><b>convex deploy</b> + re-inject URL <span class="note">(if backend changed)</span></li>
@@ -226,10 +226,10 @@
         <thead><tr><th>profile</th><th>kind</th><th>detect</th><th>output / runtime</th></tr></thead>
         <tbody>
           <tr><td>static-html</td><td><span class="chip fe">frontend</span></td><td>bare index.html, no build</td><td>nginx static</td></tr>
-          <tr><td>react-spa</td><td><span class="chip fe">frontend</span></td><td>vite / CRA, client-only</td><td>build → nginx</td></tr>
+          <tr><td>react-spa</td><td><span class="chip fe">frontend</span></td><td>vite / CRA, client-only</td><td>bun → nginx</td></tr>
           <tr><td>astro-static</td><td><span class="chip fe">frontend</span></td><td>astro.config, no SSR adapter</td><td>bun → nginx <span class="note">(exists)</span></td></tr>
-          <tr><td>nextjs-node</td><td><span class="chip fe">frontend</span> <span class="chip def">default</span></td><td>next dep, server / App-Router</td><td>node standalone</td></tr>
-          <tr><td>nextjs-static</td><td><span class="chip fe">frontend</span></td><td>next.config output:'export'</td><td>build → nginx</td></tr>
+          <tr><td>nextjs-node</td><td><span class="chip fe">frontend</span> <span class="chip def">default</span></td><td>next dep, server / App-Router</td><td>standalone · bun server.js</td></tr>
+          <tr><td>nextjs-static</td><td><span class="chip fe">frontend</span></td><td>next.config output:'export'</td><td>bun → nginx</td></tr>
           <tr><td>convex-cloud</td><td><span class="chip be">backend addon</span></td><td>convex/ dir + convex dep</td><td>backend-first: convex deploy → inject URL</td></tr>
           <tr><td>sqlite-volume</td><td><span class="chip be">backend addon</span></td><td>server app + .db / sqlite dep</td><td>persistent Coolify volume</td></tr>
         </tbody>
@@ -331,7 +331,7 @@
         <div class="dec"><dt>stack reality</dt><dd>ONE Coolify VPS · ONE Cloudflare domain · every project = a subdomain on it.</dd></div>
       </dl>
     </div>
-    <p class="note">Open for build: per-framework Dockerfile templates beyond Astro · build host needs Docker+GHCR · SQLite backups · stream progress vs final-only.</p>
+    <p class="note">Status: BUILT — bun-based Dockerfiles inline per profile (validated vs the real ones). Open: Convex inject via .env.production vs --build-arg (.dockerignore caveat) · SQLite backups · stream progress vs final-only · a Go profile. Build host needs Docker+GHCR auth.</p>
   </section>
 
 </div>

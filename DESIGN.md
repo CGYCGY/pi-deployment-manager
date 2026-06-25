@@ -5,7 +5,11 @@
 > and infra state and does the work, returning a structured result. Sibling to
 > `pi-4b-tester/` and `pi-e2e-tester/`; reuses their hub transport.
 >
-> Status: **design locked, pre-implementation** (2026-06-25 design discussion).
+> Status: **BUILT** (2026-06-25) — its own git repo on `main`. Implementation deviations from the
+> original design are folded into the sections below: idempotency is decided **live against Coolify**
+> (not a `.env.deploy` file signal), all generated Dockerfiles use **bun** (the stack standard), the
+> RPC is **synchronous** (POST blocks, result is the body), and first-deploy files are **staged, not
+> committed** (the caller owns the commit).
 
 ---
 
@@ -105,13 +109,15 @@ risk; same care here):
 The manager works **directly in the caller's `project_dir`** (the caller already has the repo
 checked out; just pass the path). No clone.
 
-- **Initial deploy** needs repo write: scaffold `deploy/Dockerfile`, commit/push, create the GitHub
-  repo if absent, provision Coolify, allocate DNS, first ship.
+- **Initial deploy** needs repo write: scaffold `deploy/Dockerfile`, **stage** the deploy/ files
+  (`git add`; the caller owns the commit), create the GitHub repo if absent, provision Coolify,
+  allocate DNS, first ship.
 - **Update deploy** is **API-only**: the deploy is image-based — `deploy/deploy.sh` builds the image,
   pushes to **GHCR**, and triggers the Coolify webhook. Redeploy just re-runs that path.
 
-**Idempotency signal (reused from coolify-setup):** `COOLIFY_WEBHOOK_URL` present in
-`deploy/.env.deploy` ⇒ project already set up ⇒ redeploy path. Absent ⇒ initial path.
+**Idempotency (decided live against Coolify):** `detect` reads `COOLIFY_APP_UUID` from
+`deploy/.env.deploy` as a hint, then confirms the app exists via the Coolify API — confirmed ⇒
+redeploy path, else initial. Coolify is authoritative; the file is only a hint.
 
 ---
 
@@ -174,12 +180,13 @@ The framework/backend spread maps to a small pluggable registry (mirrors pi-e2e-
 | id              | detect                                   | output / runtime           | Dockerfile           |
 |-----------------|------------------------------------------|----------------------------|----------------------|
 | `static-html`   | bare `index.html`, no build              | static                     | nginx                |
-| `react-spa`     | vite/CRA, client-only                    | static SPA                 | build → nginx        |
+| `react-spa`     | vite/CRA, client-only                    | static SPA                 | bun → nginx          |
 | `astro-static`  | `astro.config`, no SSR adapter           | static                     | bun → nginx (exists) |
-| `nextjs-node`   | `next` dep, server/App-Router features   | **node standalone** (default) | node runtime      |
-| `nextjs-static` | `next.config` `output: 'export'`         | static                     | build → nginx        |
+| `nextjs-node`   | `next` dep, server/App-Router features   | **standalone, run w/ bun** (default) | bun runtime |
+| `nextjs-static` | `next.config` `output: 'export'`         | static                     | bun → nginx          |
 
-Next.js mode is auto-detected from `next.config` (`output: 'export'` → static, else node-standalone).
+Next.js mode is auto-detected from `next.config` (`output: 'export'` → static, else standalone run
+with bun). Every generated Dockerfile builds with `oven/bun` (`bun install --frozen-lockfile`).
 
 ### Backend addons (compose with any frontend)
 
@@ -236,13 +243,13 @@ are deterministic code (like the testers' identity/crash guards), fail closed:
 
 ## 9. Flows
 
-**Initial deploy** — `intent:"initial deploy"`, no `COOLIFY_WEBHOOK_URL`:
+**Initial deploy** — `intent:"initial deploy"`, Coolify has no app for this project (live check):
 `detect → scaffold Dockerfile → [convex deploy → capture URL] → populate deploy/.env.deploy from
 central creds → provision Coolify app + limits → env (+ inject Convex URL) → [subdomain-collision
 guard] → dns + set Coolify domain → create GitHub repo if absent → deploy (build→GHCR→webhook) →
 [health guard] → return {url,…}`.
 
-**Update deploy** — `intent:"redeploy after update"`, `COOLIFY_WEBHOOK_URL` present:
+**Update deploy** — `intent:"redeploy after update"`, Coolify already has the app (live check):
 `detect (already set up) → [convex deploy if backend changed → re-inject URL] → redeploy (deploy.sh)
 → [health guard] → return`.
 
@@ -279,9 +286,13 @@ gitignored — same convention as pi-e2e-tester.
 
 ## 12. Open items to settle during build
 
-- **Per-framework setup skills beyond Astro** — `nextjs-node`, `react-spa`, `static-html`,
-  `nextjs-static` each need a Dockerfile template. Either new sibling skills (like `astro-setup`) or
-  inline templates in the profile registry. Lean: inline in profiles, promote to skills if reused.
+- **Per-framework Dockerfiles** — RESOLVED: inline **bun-based** templates in each profile
+  (`react-spa`, `nextjs-node`, `nextjs-static`, `static-html`; `astro-static` reuses the astro-setup
+  asset). Validated against the user's real `deploy/Dockerfile` files.
+- **Convex build-time inject** — written to the project's `.env.production` (read by the bun build).
+  A project whose `.dockerignore` excludes `.env*` would miss it — revisit a Docker `--build-arg`
+  path if that bites.
+- **Go (and other non-JS) profiles** — not covered; `detect` fails loud on them. Add a profile when needed.
 - **Build host** — image build needs Docker + GHCR auth on whatever box runs the manager. Confirm
   the manager always runs where Docker is available (the user's single dev box for now).
 - **SQLite volume backups** — persistent volume gives durability across redeploys, not backups;

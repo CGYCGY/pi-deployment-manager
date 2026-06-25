@@ -41,10 +41,10 @@ one profile file.
 | frontend profile | detect | runtime |
 |---|---|---|
 | `static-html` | bare `index.html` | nginx |
-| `react-spa` | `vite`/`react-scripts` + `react` | build → nginx |
+| `react-spa` | `vite`/`react-scripts` + `react` | bun build → nginx |
 | `astro-static` | `astro.config`, no SSR adapter | bun → nginx |
-| `nextjs-node` (default) | `next` dep | node standalone |
-| `nextjs-static` | `next.config` `output:'export'` | build → nginx |
+| `nextjs-node` (default) | `next` dep | standalone, run with `bun server.js` |
+| `nextjs-static` | `next.config` `output:'export'` | bun build → nginx |
 
 Addons: `convex-cloud` (deploy Convex Cloud backend-first, inject its prod URL as a build-time env)
 and `sqlite-volume` (mount a persistent Coolify volume for the db file).
