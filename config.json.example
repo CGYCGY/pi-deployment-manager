@@ -40,8 +40,8 @@
     "deploy_key": "CHANGE-ME-convex-deploy-key"
   },
 
-  "model": "",
-  "_model_note": "Optional model override for the manager session (empty = pi default).",
-  "thinking": "",
-  "_thinking_note": "Optional thinking tier (empty = pi default)."
+  "model": "openai-codex/gpt-5.5",
+  "_model_note": "Manager session model; matches the pi-e2e-tester hub. Empty = pi default.",
+  "thinking": "high",
+  "_thinking_note": "Reasoning tier; matches the pi-e2e-tester hub. Empty = pi default."
 }
