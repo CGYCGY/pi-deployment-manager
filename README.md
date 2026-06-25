@@ -17,9 +17,11 @@ registers. Their code enforces a path sandbox (it may only write a project's `de
 `.gitignore`, and `.env.production`) and three fail-closed guards. The wrong action is
 *unrepresentable*, not merely discouraged. One purpose, one agent, one deploy at a time.
 
-The deployment skills (`coolify`, `coolify-setup`, `cloudflare`, `astro-setup`) are the **engine the
-verb code calls** — never invoked by the LLM. A skill is "a prompt telling an LLM to run bash",
-exactly the capability the gate removes.
+Talking to Coolify and Cloudflare is **native HTTP in the verb code** — no shelling out, no external
+skill scripts. The only bundled script is `assets/deploy.sh` (docker build → GHCR push → Coolify
+webhook), copied into each project's `deploy/` as its own deploy command. The LLM reaches none of it:
+a skill is "a prompt telling an LLM to run bash", exactly the capability the gate removes. The manager
+is fully standalone — clone, `npm install`, run; nothing outside the repo.
 
 ## The ten verbs
 
@@ -59,8 +61,9 @@ and `sqlite-volume` (mount a persistent Coolify volume for the db file).
 
 Prerequisites on the host that runs the manager:
 
-- [`pi`](../pi-references), `bun`, `jq`, `curl`
+- [`pi`](../pi-references), `bun`
 - `docker`, logged in to GHCR: `docker login ghcr.io` (the image build host)
+- `curl` — used by the bundled `deploy.sh` to trigger the Coolify webhook
 - `gh`, authenticated (`gh auth login`) — for the GHCR image repo
 - `npx` (for `convex deploy`, only if you deploy Convex projects)
 

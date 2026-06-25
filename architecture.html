@@ -161,8 +161,8 @@
       <div class="node service">
         <div class="role">Service · gated</div>
         <h3>pi-deployment-manager</h3>
-        <p><b>Heavily gated:</b> no raw Bash/Edit/Read — only the 10 verbs. Wraps the 4 skill scripts,
-           all creds, the profile registry &amp; guards. <b>Spawn-on-demand</b>, runs <b>in place</b> on the repo.</p>
+        <p><b>Heavily gated:</b> no raw Bash/Edit/Read — only the 10 verbs. Native Coolify/Cloudflare
+           HTTP, all creds, the profile registry &amp; guards. <b>Spawn-on-demand</b>, runs <b>in place</b> on the repo.</p>
       </div>
     </div>
 
@@ -249,14 +249,14 @@
     <h2>4 · The gate — a heavily-gated, single-purpose agent</h2>
     <div class="grid2">
       <div class="card pad">
-        <h4 style="margin:0 0 12px;font-size:15px">Skills aren't invoked by the LLM — they're the wrapped engine</h4>
-        <p style="color:var(--dim);font-size:13.5px;margin:0 0 14px">A skill is a prompt that tells an LLM to run bash — exactly the capability removed. So the skill scripts become the engine the <b style="color:var(--ink)">tool code</b> calls; the model only ever sees verbs.</p>
+        <h4 style="margin:0 0 12px;font-size:15px">No skills — the engine is native code</h4>
+        <p style="color:var(--dim);font-size:13.5px;margin:0 0 14px">A skill is a prompt that tells an LLM to run bash — exactly the capability removed. So Coolify/Cloudflare are <b style="color:var(--ink)">native HTTP in the tool code</b>; the only subprocess is the local build. The model only ever sees verbs, and nothing lives outside the repo.</p>
         <div style="font:600 12px/1.8 var(--mono);color:var(--dim);background:#10151d;border:1px solid var(--line);border-radius:10px;padding:14px 16px">
           <span style="color:var(--purple)">manager&nbsp;LLM</span> ──can&nbsp;only&nbsp;call──▶<br>
           &nbsp;&nbsp;[ <span style="color:var(--accent)">detect · scaffold · provision · dns · deploy · …</span> ]<br>
           &nbsp;&nbsp;&nbsp;&nbsp;│ <span style="color:var(--faint)">tool implementation (code)</span><br>
-          &nbsp;&nbsp;&nbsp;&nbsp;└─▶ coolify/tools/*.sh · cloudflare/tools/*.sh<br>
-          &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;deploy.sh · npx convex deploy · gh
+          &nbsp;&nbsp;&nbsp;&nbsp;├─▶ native fetch → Coolify API · Cloudflare API<br>
+          &nbsp;&nbsp;&nbsp;&nbsp;└─▶ deploy.sh (docker build→push→webhook) · npx convex deploy · gh
         </div>
       </div>
       <div class="card pad">
@@ -324,7 +324,7 @@
         <div class="dec"><dt>project access</dt><dd>Both modes, <b>operate in place</b> — no clone. Initial writes+commits; update is API-only.</dd></div>
         <div class="dec"><dt>subdomain</dt><dd><b>Caller-specified</b> per deploy; collision-guarded against the single shared domain.</dd></div>
         <div class="dec"><dt>gating</dt><dd><b>No raw Bash/Edit/Read</b> — only the 10 verbs. Read project / write-deploy allowlist, enforced in tool code.</dd></div>
-        <div class="dec"><dt>execution</dt><dd>The 4 skill scripts are the <b>wrapped engine</b> the tool code calls — never invoked by the LLM.</dd></div>
+        <div class="dec"><dt>execution</dt><dd>Coolify/Cloudflare are <b>native HTTP</b> in the tool code; only the local build (deploy.sh) shells out. No external skill scripts.</dd></div>
         <div class="dec"><dt>creds</dt><dd><b>Centralized in the manager</b>; injected into each project's gitignored deploy/.env.deploy at deploy time, never committed.</dd></div>
         <div class="dec"><dt>convex</dt><dd><b>Convex Cloud</b>, deployed first; prod URL injected as build-time env into the frontend.</dd></div>
         <div class="dec"><dt>context reset</dt><dd><b>compact()</b> per deploy — each deploy is an isolated task; never reset mid-flow.</dd></div>

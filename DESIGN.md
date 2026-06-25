@@ -121,37 +121,39 @@ redeploy path, else initial. Coolify is authoritative; the file is only a hint.
 
 ---
 
-## 5. Execution layer — gated custom-tool surface, skills are the wrapped engine
+## 5. Execution layer — gated custom-tool surface, native engine in code
 
 **The manager is a heavily-gated, single-purpose agent.** Its LLM has **no raw Bash / Edit / Read /
 Glob** and cannot roam the filesystem. It sees **only** the semantic verbs of §7 — custom tools
 implemented in code (the pi-e2e-tester spoke philosophy: a closed, semantic surface, not raw device
 access). One purpose, one agent, one deploy at a time.
 
-**Skills are not invoked by the LLM** — a skill is a *prompt that tells an LLM to run bash*, which is
-exactly the capability being removed. Instead the skill scripts become the **engine the tool code
-calls internally**:
+**The engine is the verbs' own code, not skill scripts.** A skill is a *prompt that tells an LLM to
+run bash* — exactly the capability being removed — so the manager carries none. Talking to Coolify
+and Cloudflare is **native HTTP** (`fetch`) inside the tool code; the only subprocess left is the one
+real local build step:
 
 ```
 manager LLM ──can only call──▶ [ detect | scaffold | provision | dns | deploy | … ]   ← the gate
                                       │  (tool implementation, in code)
-                                      └── runs coolify/tools/*.sh, cloudflare/tools/*.sh,
-                                          deploy/deploy.sh, npx convex deploy, gh …
+                                      ├── native fetch → Coolify API, Cloudflare API
+                                      └── subprocess → deploy/deploy.sh (docker build → GHCR
+                                          push → Coolify webhook), npx convex deploy, gh, git
 ```
 
-So the four skills (`astro-setup`, `coolify-setup`, `coolify`, `cloudflare`) are still the reused
-implementation — `coolify-setup` (first-time: scaffold `deploy/`, create app w/ port auto-inferred
-from Dockerfile `EXPOSE`, limits, optional DNS, first deploy; image-based build→GHCR→webhook),
-`coolify` (ongoing redeploy/logs/env/status), `cloudflare` (DNS/zones), per-framework Dockerfile
-templates — but they're driven by the **tool's code**, never by the model. The model has no path to
-the underlying bash.
+The Coolify/Cloudflare REST calls the original `coolify`/`cloudflare` skills made with `curl` + `jq`
+are ported into `manager/coolify.ts` and `manager/cloudflare.ts` as native `fetch`. The one script
+that *cannot* become a fetch — `deploy.sh` (it runs `docker build`/`push`) — ships as a bundled asset
+(`assets/deploy.sh`), copied into each project's `deploy/` as its own deploy command. Per-framework
+Dockerfile templates live in `manager/profiles/`. The model has no path to any of it, and the manager
+depends on **no external `skills_dir`** — clone, `npm install`, run.
 
 ### 5.0 Sandbox (the gate) — enforced in tool code, not trusted to the LLM
 
 | capability | scope |
 |------------|-------|
 | **read**   | the target `project_dir`, **read-only** — `detect` must inspect `package.json` / `next.config` / `astro.config` / `convex/` / `index.html` to pick the profile. |
-| **write**  | a fixed **allowlist**: `<project_dir>/deploy/*`, plus the two project-root writes coolify-setup makes (`.gitignore` entries, `.env.production`), and `git add/commit` of those. **Nothing else.** |
+| **write**  | a fixed **allowlist**: `<project_dir>/deploy/*`, plus two project-root writes (`.gitignore` entries, `.env.production`), and `git add/commit` of those. **Nothing else.** |
 | **network**| Coolify · Cloudflare · GHCR · Convex Cloud · GitHub (`gh`) APIs only. |
 | **denied** | general Bash, Edit, Read, Glob, Write outside the allowlist. |
 
@@ -163,7 +165,8 @@ tool implementation, not a rule the LLM is asked to honor.
 Today each project's `deploy/.env.deploy` must hold the Coolify + Cloudflare tokens. With the
 manager, **creds live in ONE place — the manager's config** — never copied per project. At deploy
 time the manager **populates the project's gitignored `deploy/.env.deploy` from its central config**
-(or injects via env), then invokes the skills. Projects stop carrying secrets. *(Locked.)*
+for the bundled `deploy.sh` to source; its own Coolify/Cloudflare API calls read creds straight from
+config. Projects stop carrying secrets. *(Locked.)*
 
 ---
 
@@ -235,7 +238,7 @@ are deterministic code (like the testers' identity/crash guards), fail closed:
    *this* `project_dir`+subdomain (tracked via `deploy/.env.deploy`'s `COOLIFY_APP_UUID`/`DOMAIN`).
    Never modify another project's app on the shared server.
 3. **Deploy-health guard** — after `deploy`/`redeploy`, poll Coolify deployment status + the
-   `/healthz` endpoint; auto-**fail** the result if unhealthy (the skills already add `HEALTHCHECK`
+   `/healthz` endpoint; auto-**fail** the result if unhealthy (the profile Dockerfiles already add `HEALTHCHECK`
    + `/healthz`). This is the deployment analog of the crash-guard — catches a deploy that "succeeds"
    but serves a broken app.
 
@@ -275,9 +278,10 @@ Manager-owned config; no hardcoded paths/creds:
 - `registry.{github_org, ghcr}` — GHCR/GitHub org for image push.
 - `convex.deploy_key` — Convex Cloud deploy key.
 
-Per-**project** deploy state stays in each project's **gitignored `deploy/.env.deploy`** (owned by
-`coolify-setup`: `COOLIFY_APP_UUID`, `COOLIFY_WEBHOOK_URL`, `DOMAIN`, `SUBDOMAIN`, …) — the manager
-populates the cred fields from central config at deploy time, never commits them.
+Per-**project** deploy state stays in each project's **gitignored `deploy/.env.deploy`** (written by
+the manager: `COOLIFY_APP_UUID`, `COOLIFY_WEBHOOK_URL`, `DOMAIN`, `SUBDOMAIN`, …) — consumed only by
+the bundled `deploy.sh`; the manager populates the cred fields from central config at deploy time and
+never commits them.
 
 A `config.json.example` (placeholder template + inline notes) ships; live `config.json` is
 gitignored — same convention as pi-e2e-tester.
