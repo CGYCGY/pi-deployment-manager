@@ -15,12 +15,13 @@ const NGINX_CONF = `server {
 }
 `;
 
-const DOCKERFILE = `FROM node:alpine AS build
+// Built with bun (the stack standard); next build with output:'export' emits out/.
+const DOCKERFILE = `FROM oven/bun:1-alpine AS build
 WORKDIR /app
-COPY package.json package-lock.json* ./
-RUN npm ci || npm install
+COPY package.json bun.lock* ./
+RUN bun install --frozen-lockfile
 COPY . .
-RUN npm run build
+RUN bun run build
 
 FROM nginx:alpine
 COPY --from=build /app/out /usr/share/nginx/html

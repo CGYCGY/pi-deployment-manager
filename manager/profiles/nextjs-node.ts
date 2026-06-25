@@ -5,19 +5,30 @@
 import type { DeployProfile, DockerfileOutput } from "./types.ts";
 import { hasDep, nextOutputIsExport, readPackageJson } from "./util.ts";
 
-// `mkdir -p public` so the COPY never fails on a repo without a public/ dir.
-// HOSTNAME=0.0.0.0 so the standalone server binds outside the container, not just lo.
-const DOCKERFILE = `FROM node:alpine AS build
+// Built AND run with bun (the stack standard); Next's standalone server is plain JS that
+// bun executes (`bun server.js`). mkdir -p public so the COPY never fails on a repo with
+// no public/ dir. HOSTNAME=0.0.0.0 so the standalone server binds outside the container.
+// SKIP_ENV_VALIDATION: a no-op unless the app uses @t3-oss/env — then it lets the build
+// run without the server-only envs (Coolify injects those at runtime).
+const DOCKERFILE = `FROM oven/bun:1-alpine AS deps
 WORKDIR /app
-COPY package.json package-lock.json* ./
-RUN npm ci || npm install
+COPY package.json bun.lock* ./
+RUN bun install --frozen-lockfile
+
+FROM oven/bun:1-alpine AS build
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-RUN npm run build
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV SKIP_ENV_VALIDATION=1
+RUN bun run build
 RUN mkdir -p public
 
-FROM node:alpine AS run
+FROM oven/bun:1-alpine AS run
 WORKDIR /app
 ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
 COPY --from=build /app/.next/standalone ./
@@ -26,7 +37,7 @@ COPY --from=build /app/public ./public
 HEALTHCHECK --interval=60s --timeout=5s --start-period=15s --retries=3 \\
   CMD wget -qO- http://localhost:3000/ || exit 1
 EXPOSE 3000
-CMD ["node", "server.js"]
+CMD ["bun", "server.js"]
 `;
 
 export const nextjsNode: DeployProfile = {

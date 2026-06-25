@@ -14,14 +14,15 @@ const NGINX_CONF = `server {
 }
 `;
 
-// npm ci needs a lockfile; fall back to install so a lockfile-less repo still builds.
+// Built with bun (the stack standard — every project ships bun.lock, not package-lock).
+// --frozen-lockfile keeps the install reproducible against the committed lockfile.
 function dockerfile(outDir: string): string {
-  return `FROM node:alpine AS build
+  return `FROM oven/bun:1-alpine AS build
 WORKDIR /app
-COPY package.json package-lock.json* ./
-RUN npm ci || npm install
+COPY package.json bun.lock* ./
+RUN bun install --frozen-lockfile
 COPY . .
-RUN npm run build
+RUN bun run build
 
 FROM nginx:alpine
 COPY --from=build /app/${outDir} /usr/share/nginx/html
