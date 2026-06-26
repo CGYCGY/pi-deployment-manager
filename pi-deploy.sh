@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
-# pi-deploy.sh <project_dir> <subdomain> <intent...> — hand a deploy to the manager.
+# pi-deploy.sh <project_dir> <subdomain> <intent...> [--env-file <path>]
+#   — hand a deploy to the manager.
+#
+# --env-file <path> (optional): path, RELATIVE TO <project_dir>, to a gitignored dotenv
+# file of RUNTIME secrets. Only the PATH is sent; the manager reads the file in-sandbox and
+# sets the vars on Coolify — so secrets never sit in argv or cross the wire. Do NOT put
+# PUBLIC_BASE_URL in it; the manager derives that from the subdomain + zone.
 #
 # The spawn-on-demand entry point a project agent runs: if no manager is listening it
 # spawns launch-manager.sh, waits for the portfile, then POSTs the deploy and prints the
@@ -18,12 +24,23 @@ for bin in jq curl; do
 done
 [ -f "$CONFIG" ] || { echo "pi-deploy: config.json not found at $CONFIG (copy config.json.example)" >&2; exit 1; }
 
+ENV_FILE=""
+POSITIONAL=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --env-file) ENV_FILE="${2:-}"; shift 2 ;;
+    --env-file=*) ENV_FILE="${1#*=}"; shift ;;
+    *) POSITIONAL+=("$1"); shift ;;
+  esac
+done
+set -- "${POSITIONAL[@]}"
+
 PROJECT_DIR="${1:-}"
 SUBDOMAIN="${2:-}"
 shift 2 2>/dev/null || true
 INTENT="${*:-}"
 if [ -z "$PROJECT_DIR" ] || [ -z "$SUBDOMAIN" ] || [ -z "$INTENT" ]; then
-  echo "usage: pi-deploy.sh <project_dir> <subdomain> <intent...>" >&2
+  echo "usage: pi-deploy.sh <project_dir> <subdomain> <intent...> [--env-file <path>]" >&2
   exit 2
 fi
 
@@ -48,8 +65,9 @@ TOKEN="$(jq -r '.token // empty' "$ENDPOINT")"
 [ -n "$TOKEN" ] || TOKEN="$(jq -r '.rpc.token' "$CONFIG")"
 
 PAYLOAD="$(jq -nc \
-  --arg pd "$PROJECT_DIR" --arg sd "$SUBDOMAIN" --arg it "$INTENT" --arg rid "cli-$$-$(date +%s)" \
-  '{type:"deploy",from:"client",ts:0,requestId:$rid,project_dir:$pd,subdomain:$sd,intent:$it}')"
+  --arg pd "$PROJECT_DIR" --arg sd "$SUBDOMAIN" --arg it "$INTENT" --arg ef "$ENV_FILE" --arg rid "cli-$$-$(date +%s)" \
+  '{type:"deploy",from:"client",ts:0,requestId:$rid,project_dir:$pd,subdomain:$sd,intent:$it}
+   + (if $ef != "" then {env_file:$ef} else {} end)')"
 
 curl -fsS -X POST "http://127.0.0.1:$PORT/deploy" \
   -H "content-type: application/json" \

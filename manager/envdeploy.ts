@@ -20,7 +20,12 @@ export interface EnvDeployFields {
   webhookUrl?: string;
 }
 
-function parseEnv(text: string): Record<string, string> {
+/**
+ * Parse dotenv text (KEY=VALUE per line, `#` comments and blanks skipped). Splits on the
+ * FIRST `=` so values may contain `=` (base64 secrets), and strips one surrounding quote
+ * layer. Shared with the env verb, which loads a project's runtime secret file the same way.
+ */
+export function parseDotenv(text: string): Record<string, string> {
   const out: Record<string, string> = {};
   for (const raw of text.split("\n")) {
     const line = raw.trim();
@@ -29,7 +34,6 @@ function parseEnv(text: string): Record<string, string> {
     if (eq <= 0) continue;
     const key = line.slice(0, eq).trim();
     let val = line.slice(eq + 1).trim();
-    // writeEnvDeploy writes COOLIFY_WEBHOOK_URL quoted; strip one quote layer.
     if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
       val = val.slice(1, -1);
     }
@@ -42,7 +46,7 @@ function parseEnv(text: string): Record<string, string> {
 export function readEnvDeploy(projectDir: string): Record<string, string> {
   const path = assertReadable(projectDir, "deploy/.env.deploy");
   if (!existsSync(path)) return {};
-  return parseEnv(readFileSync(path, "utf8"));
+  return parseDotenv(readFileSync(path, "utf8"));
 }
 
 /**

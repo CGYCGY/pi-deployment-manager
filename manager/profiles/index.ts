@@ -6,6 +6,7 @@
 
 import { astroStatic } from "./astro-static.ts";
 import { convexCloud } from "./addons/convex-cloud.ts";
+import { dockerfileProfile } from "./dockerfile.ts";
 import { nextjsNode } from "./nextjs-node.ts";
 import { nextjsStatic } from "./nextjs-static.ts";
 import { reactSpa } from "./react-spa.ts";
@@ -14,12 +15,15 @@ import { staticHtml } from "./static-html.ts";
 import type { BackendAddon, DeployProfile } from "./types.ts";
 import { hasDep, isAstroStatic, nextOutputIsExport, readPackageJson } from "./util.ts";
 
+// The framework profiles (which GENERATE a Dockerfile) plus the generic `dockerfile`
+// profile (which HONORS the project's own). dockerfile is last: the generic fallback.
 export const FRONTEND_PROFILES: DeployProfile[] = [
   staticHtml,
   reactSpa,
   astroStatic,
   nextjsNode,
   nextjsStatic,
+  dockerfileProfile,
 ];
 
 export const BACKEND_ADDONS: BackendAddon[] = [convexCloud, sqliteVolume];
@@ -57,12 +61,19 @@ export async function detectProfile(projectDir: string): Promise<DeployProfile> 
   if (await staticHtml.detect(projectDir)) {
     return staticHtml;
   }
+  // Generic fallback: no framework matched, but the project ships its own Dockerfile
+  // (a plain Bun/Go/Python/… server). Honor it. Checked LAST so a framework repo that
+  // happens to carry a Dockerfile still gets its build profile.
+  if (await dockerfileProfile.detect(projectDir)) {
+    return dockerfileProfile;
+  }
 
   throw new Error(
     `pi-deployment-manager: could not detect a deploy profile for ${projectDir}. Looked for: ` +
       `a "next" dep (nextjs-node / nextjs-static by output:'export'), an astro.config with no SSR ` +
-      `adapter (astro-static), "vite"/"react-scripts" + "react" (react-spa), or a root index.html ` +
-      `with no build script (static-html). Add a profile or adjust the project.`,
+      `adapter (astro-static), "vite"/"react-scripts" + "react" (react-spa), a root index.html ` +
+      `with no build script (static-html), or a project Dockerfile (dockerfile). Add a profile, ` +
+      `ship a Dockerfile, or adjust the project.`,
   );
 }
 

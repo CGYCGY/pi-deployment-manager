@@ -25,6 +25,12 @@ export interface DeployRequest {
   intent: string;
   /** Optional extra env KEY=VALUE pairs to set on the app. */
   env?: Record<string, string>;
+  /**
+   * Optional path (relative to project_dir) to a gitignored dotenv file of RUNTIME secrets.
+   * The manager reads it in-sandbox and bulk-sets the vars on Coolify — so secrets never
+   * cross the RPC wire or sit in argv. Absolute/escaping paths are refused by the sandbox.
+   */
+  env_file?: string;
 }
 
 /**
@@ -78,6 +84,8 @@ export interface CurrentDeploy {
   subdomain: string;
   intent: string;
   env?: Record<string, string>;
+  /** Sandbox-relative path to a gitignored runtime dotenv file (read by the env verb). */
+  env_file?: string;
   ledger: DeployLedger;
   /**
    * Transient inter-verb scratchpad (e.g. the captured Convex URL + the build-env var
@@ -103,6 +111,7 @@ export interface DeployMessage extends TransportBase {
   subdomain: string;
   intent: string;
   env?: Record<string, string>;
+  env_file?: string;
 }
 
 /**

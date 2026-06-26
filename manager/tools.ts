@@ -17,7 +17,7 @@ import { Type } from "typebox";
 
 import { ASSETS_DIR, getCloudflare, getConvex, getRegistry } from "../shared/config.ts";
 import type { Logger } from "../shared/log.ts";
-import { assertWritable, safeDeployPath } from "../shared/sandbox.ts";
+import { assertReadable, assertWritable, safeDeployPath } from "../shared/sandbox.ts";
 import type { CurrentDeploy } from "../shared/types.ts";
 
 import { createRecord } from "./cloudflare.ts";
@@ -31,7 +31,7 @@ import {
   setEnvs,
   updateAppDomain,
 } from "./coolify.ts";
-import { ensureGitignored, readEnvDeploy, writeEnvDeploy } from "./envdeploy.ts";
+import { ensureGitignored, parseDotenv, readEnvDeploy, writeEnvDeploy } from "./envdeploy.ts";
 import { assertHealthy, assertSubdomainFree, assertTargetsOurApp } from "./guards.ts";
 import { detectAddons, detectProfile, getProfile } from "./profiles/index.ts";
 import { runCommand } from "./subprocess.ts";
@@ -88,10 +88,11 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
     name: "detect",
     label: "Detect (read)",
     description:
-      "Inspect the target project (read-only) to select its frontend DeployProfile " +
-      "(static-html | react-spa | astro-static | nextjs-node | nextjs-static) and any " +
-      "backend addons (convex-cloud | sqlite-volume). Read-only — never mutates the repo " +
-      "or infra. START every deploy here.",
+      "Inspect the target project (read-only) to select its DeployProfile " +
+      "(static-html | react-spa | astro-static | nextjs-node | nextjs-static | dockerfile) " +
+      "and any backend addons (convex-cloud | sqlite-volume). The generic `dockerfile` " +
+      "profile honors a project's own Dockerfile (any Bun/Go/Python/… server). Read-only — " +
+      "never mutates the repo or infra. START every deploy here.",
     promptSnippet: "Inspect the project and pick its deploy profile + backend addons (read-only).",
     promptGuidelines: ["Always call detect first — every later verb depends on the chosen profile."],
     parameters: Type.Object({}),
@@ -102,6 +103,16 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
       const addons = await detectAddons(d.project_dir);
       d.ledger.profile = profile.id;
       d.ledger.addons = addons.map((a) => a.id);
+
+      // Resolve per-project facts the profile reads from the repo (the dockerfile profile
+      // pulls port/volume/health from the project's own Dockerfile). Stash in scratch for
+      // provision/deploy — the profile singleton can't hold per-deploy state.
+      const meta = profile.inspect ? await profile.inspect(d.project_dir) : {};
+      if (meta.port) d.scratch.exposedPort = String(meta.port);
+      if (meta.volumeSpec) d.scratch.volumeSpec = meta.volumeSpec;
+      if (meta.healthPath) d.scratch.healthPath = meta.healthPath;
+      const port = meta.port ?? profile.port;
+      const healthPath = meta.healthPath ?? profile.healthPath;
 
       // Idempotency is decided LIVE against Coolify (locked): deploy/.env.deploy is only a
       // hint — Coolify is authoritative. App recorded AND confirmed present ⇒ update path.
@@ -121,10 +132,11 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
         flow === "initial"
           ? "INITIAL flow: scaffold -> [convex if present] -> provision -> env -> dns -> deploy, then status."
           : "UPDATE flow: [convex if the backend changed] -> redeploy, then status.";
+      const volStr = d.scratch.volumeSpec ? `, volume ${d.scratch.volumeSpec}` : "";
       return ok(
-        `Detected ${profile.id} (port ${profile.port}, health ${profile.healthPath}); addons: ${addonStr}. ` +
+        `Detected ${profile.id} (port ${port}, health ${healthPath}${volStr}); addons: ${addonStr}. ` +
           `Flow: ${flow.toUpperCase()}.${hint}\n${plan}`,
-        { profile: profile.id, addons: d.ledger.addons, flow, port: profile.port, healthPath: profile.healthPath },
+        { profile: profile.id, addons: d.ledger.addons, flow, port, healthPath },
       );
     },
   });
@@ -253,15 +265,19 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
 
       const addons = await detectAddons(d.project_dir);
       const sqlite = addons.find((a) => a.id === "sqlite-volume");
-      // Volume names are global on the shared Coolify box — prefix the subdomain to keep
-      // each project's volume distinct.
-      const persistentStorages = sqlite?.volumeSpec ? `${d.subdomain}-${sqlite.volumeSpec}` : undefined;
+      // A persistent volume comes from EITHER the project's Dockerfile VOLUME (the generic
+      // dockerfile profile, stashed in scratch by detect) OR the sqlite addon. Volume names
+      // are global on the shared Coolify box — prefix the subdomain to keep them distinct.
+      const bareVolume = d.scratch.volumeSpec ?? sqlite?.volumeSpec;
+      const persistentStorages = bareVolume ? `${d.subdomain}-${bareVolume}` : undefined;
+      // Prefer the port detect resolved from the Dockerfile; fall back to the profile default.
+      const exposedPort = d.scratch.exposedPort ? Number(d.scratch.exposedPort) : profile.port;
 
       const { uuid: appUuid, webhookUrl } = await createApp({
         projectUuid,
         name: d.subdomain,
         image,
-        exposedPort: profile.port,
+        exposedPort,
         persistentStorages,
         instantDeploy: false, // image not pushed yet — deploy ships it.
       });
@@ -275,7 +291,7 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
       d.ledger.phase = "provisioned";
       return ok(
         `Provisioned Coolify app "${d.subdomain}" (uuid ${appUuid}) under ${projectName}, image ${image}, ` +
-          `port ${profile.port}${persistentStorages ? `, volume ${persistentStorages}` : ""}.`,
+          `port ${exposedPort}${persistentStorages ? `, volume ${persistentStorages}` : ""}.`,
         { app_uuid: appUuid, image },
       );
     },
@@ -285,8 +301,9 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
     name: "env",
     label: "Set app env (write)",
     description:
-      "Set environment variables on the Coolify app — including the captured Convex prod URL and " +
-      "any extra vars the caller passed. Targets only THIS project's app.",
+      "Set environment variables on the Coolify app: the auto-derived PUBLIC_BASE_URL, the caller's " +
+      "runtime secrets (loaded in-sandbox from the deploy's env_file), the captured Convex prod URL, " +
+      "and any inline vars. Bulk-replaces the app's env set. Targets only THIS project's app.",
     promptSnippet: "Set environment variables on this project's Coolify app.",
     parameters: Type.Object({
       vars: Type.Optional(
@@ -306,18 +323,30 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
       if (!appUuid) throw new Error("env: no provisioned app yet (run provision first).");
       assertTargetsOurApp(d.project_dir, appUuid);
 
-      const pairs: Array<[string, string]> = [];
+      // Merge lowest-precedence first (Map de-dupes; later sets win).
+      const merged = new Map<string, string>();
+      // Auto-derived final URL — overridable, so the caller never has to get it right (or even
+      // know the zone). An app that reads a different var name just sets its own in the env_file.
+      merged.set("PUBLIC_BASE_URL", `https://${d.subdomain}.${getCloudflare().zone_name}`);
+      // Runtime secrets from the caller's gitignored dotenv file: the MANAGER reads it in-sandbox
+      // (path relative to project_dir; the sandbox refuses any escape), so secrets never cross the
+      // RPC wire or sit in argv.
+      if (d.env_file) {
+        const full = assertReadable(d.project_dir, d.env_file);
+        if (!existsSync(full)) throw new Error(`env: env_file "${d.env_file}" not found under project_dir.`);
+        for (const [k, v] of Object.entries(parseDotenv(readFileSync(full, "utf8")))) merged.set(k, v);
+      }
+      for (const [k, v] of Object.entries(d.env ?? {})) merged.set(k, v);
       for (const v of (params as { vars?: Array<{ key: string; value: string }> }).vars ?? []) {
-        pairs.push([v.key, v.value]);
+        merged.set(v.key, v.value);
       }
-      for (const [k, v] of Object.entries(d.env ?? {})) pairs.push([k, v]);
       if (d.scratch.convexUrl && d.scratch.convexEnvVar) {
-        pairs.push([d.scratch.convexEnvVar, d.scratch.convexUrl]);
+        merged.set(d.scratch.convexEnvVar, d.scratch.convexUrl);
       }
-      if (!pairs.length) return ok("env: nothing to set (no caller vars, no Convex URL).", { set: 0 });
+      const pairs = [...merged.entries()];
 
       // Coolify's bulk endpoint REPLACES the app's env set (initial-flow step). Sent over
-      // the API directly — caller secrets never touch disk.
+      // the API directly — caller secrets never touch disk on the manager side.
       await setEnvs(appUuid, pairs);
       d.ledger.phase = "env-set";
       return ok(`Set ${pairs.length} env var(s) on app ${appUuid}: ${pairs.map(([k]) => k).join(", ")}.`, {
@@ -401,7 +430,7 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
 
       const profile = d.ledger.profile ? getProfile(d.ledger.profile) : undefined;
       const url = d.ledger.url ?? `https://${d.subdomain}.${getCloudflare().zone_name}`;
-      const health = await assertHealthy(appUuid, url, profile?.healthPath ?? "/");
+      const health = await assertHealthy(appUuid, url, d.scratch.healthPath ?? profile?.healthPath ?? "/");
       d.ledger.url = url;
       d.ledger.health = health.healthy ? "healthy" : "unhealthy";
       if (!health.healthy) d.ledger.logs_tail = await getAppLogs(appUuid).catch(() => "");
@@ -446,7 +475,7 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
       const env = readEnvDeploy(d.project_dir);
       const profile = d.ledger.profile ? getProfile(d.ledger.profile) : undefined;
       const url = d.ledger.url ?? (env.DOMAIN ? `https://${env.DOMAIN}` : `https://${d.subdomain}.${getCloudflare().zone_name}`);
-      const health = await assertHealthy(appUuid, url, profile?.healthPath ?? "/");
+      const health = await assertHealthy(appUuid, url, d.scratch.healthPath ?? profile?.healthPath ?? "/");
       d.ledger.url = url;
       d.ledger.health = health.healthy ? "healthy" : "unhealthy";
       if (!health.healthy) d.ledger.logs_tail = await getAppLogs(appUuid).catch(() => "");

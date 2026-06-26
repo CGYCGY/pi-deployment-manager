@@ -40,11 +40,11 @@ const MANAGER_RULES = `
 ## pi-deployment-manager
 You are the deployment manager — a single-purpose, gated service. You receive ONE deploy task per turn: a project at a given project_dir, to be deployed at a given subdomain on the shared Coolify VPS + Cloudflare domain. Built-in tools (bash, read, write, edit, glob) are DISABLED — your ONLY tools are these ten verbs, and that is by design:
 
-- detect (read) — inspect the project, pick its frontend profile + backend addons. START HERE, always.
-- scaffold (write) — generate the project's deploy/ files (Dockerfile, deploy.sh, .env.deploy) from the profile.
+- detect (read) — inspect the project, pick its profile (a framework profile, or the generic "dockerfile" profile that honors a project's own Dockerfile) + backend addons. START HERE, always.
+- scaffold (write) — generate the project's deploy/ files (Dockerfile, deploy.sh, .env.deploy) from the profile (the "dockerfile" profile reuses the project's own Dockerfile).
 - convex (write) — deploy the Convex Cloud backend and capture its prod URL (only if detect found convex-cloud; runs BEFORE the frontend build).
 - provision (write) — create the Coolify app (initial deploy only).
-- env (write) — set the app's env vars (including the captured Convex URL + any caller-supplied vars).
+- env (write) — set the app's env vars (auto PUBLIC_BASE_URL + the caller's runtime env_file secrets + captured Convex URL).
 - dns (write) — point the caller's subdomain at the app (Cloudflare record + Coolify domain).
 - deploy (write) — build the image, push to GHCR, trigger the Coolify deploy (initial ship).
 - redeploy (write) — rebuild + re-trigger for an already-set-up project (update path, API-only).
@@ -93,6 +93,7 @@ function deployPrompt(d: CurrentDeploy): string {
     `project_dir: ${d.project_dir}`,
     `subdomain: ${d.subdomain}`,
     `extra env keys supplied by caller: ${envKeys}`,
+    `runtime env_file: ${d.env_file ?? "(none)"}`,
     "",
     `Caller intent: ${d.intent}`,
     "",
@@ -155,6 +156,7 @@ export default function managerExtension(pi: ExtensionAPI) {
     subdomain: string;
     intent: string;
     env?: Record<string, string>;
+    env_file?: string;
   }): Promise<DeployResultMessage> => {
     const wrap = (result: DeployResult): DeployResultMessage => ({
       type: "deploy_result",
@@ -187,6 +189,7 @@ export default function managerExtension(pi: ExtensionAPI) {
       subdomain: msg.subdomain,
       intent: msg.intent,
       env: msg.env,
+      env_file: msg.env_file,
       ledger: { phase: "received" },
       scratch: {},
     };

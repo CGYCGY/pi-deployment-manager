@@ -15,6 +15,21 @@ export interface DockerfileOutput {
   files?: Record<string, string>;
 }
 
+/**
+ * Per-project facts a profile resolves from the repo at detect time. The framework
+ * profiles generate their own Dockerfile, so their port/health are static; the generic
+ * `dockerfile` profile instead READS these from the project's own Dockerfile (EXPOSE /
+ * VOLUME / HEALTHCHECK), so they must be resolved per-deploy, not baked into the singleton.
+ */
+export interface ProfileInspection {
+  /** EXPOSE port — overrides the profile's static `port` for provision. */
+  port?: number;
+  /** Bare Coolify PERSISTENT_STORAGES spec ("name:/mount"); provision prefixes the subdomain. */
+  volumeSpec?: string;
+  /** Health-probe path (e.g. from a HEALTHCHECK) — overrides the profile's static `healthPath`. */
+  healthPath?: string;
+}
+
 export interface DeployProfile {
   id: string;
   /** Read-only inspection of project_dir (via shared/sandbox + node fs — never bash). */
@@ -24,6 +39,12 @@ export interface DeployProfile {
   port: number;
   /** What the deploy-health guard polls ("/healthz" for served apps, "/" for bare static). */
   healthPath: string;
+  /**
+   * Optional: resolve per-project port/volume/health from the repo at detect time. The
+   * detect verb stores the result in the deploy scratch; provision/deploy prefer it over
+   * the static fields. Profiles that generate their own Dockerfile omit this.
+   */
+  inspect?(projectDir: string): Promise<ProfileInspection>;
   resourceHint?: { cpu?: string; memory?: string };
   needsVolume?: boolean;
   /** A non-obvious build precondition worth surfacing in the deploy summary. */

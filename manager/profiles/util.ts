@@ -105,3 +105,42 @@ export function nextOutputIsExport(projectDir: string): boolean {
 export function isAstroStatic(projectDir: string, pkg: PackageJson | null): boolean {
   return existsFirst(projectDir, ASTRO_CONFIGS) && !hasAnyDep(pkg, ASTRO_SSR_ADAPTERS);
 }
+
+// ── Bring-your-own-Dockerfile (generic profile) ──────────────────────────────
+
+/** The project's own Dockerfile (root preferred, then deploy/), or null if it ships none. */
+export function readProjectDockerfile(projectDir: string): string | null {
+  return readText(projectDir, "Dockerfile") ?? readText(projectDir, "deploy/Dockerfile");
+}
+
+export interface DockerfileMeta {
+  /** First EXPOSE port. */
+  expose?: number;
+  /** First VOLUME mount path (e.g. "/data"). */
+  volumeMount?: string;
+  /** URL path pulled from the HEALTHCHECK CMD (e.g. "/healthz"). */
+  healthPath?: string;
+}
+
+/**
+ * Parse the deploy-relevant directives a container declares about itself, so the generic
+ * profile can honor the project's own Dockerfile instead of needing language knowledge.
+ * Best-effort and forgiving: a directive that isn't found simply stays undefined.
+ */
+export function parseDockerfile(text: string): DockerfileMeta {
+  const meta: DockerfileMeta = {};
+
+  const expose = text.match(/^\s*EXPOSE\s+(\d+)/im);
+  if (expose?.[1]) meta.expose = Number(expose[1]);
+
+  // `VOLUME ["/data", ...]` (JSON array) or `VOLUME /data /other` (shell form) — take the first path.
+  const volume = text.match(/^\s*VOLUME\s+(.+)$/im);
+  const firstMount = volume?.[1]?.match(/\/[^\s"'[\],]+/);
+  if (firstMount) meta.volumeMount = firstMount[0];
+
+  // HEALTHCHECK can wrap across lines with `\`; pull the first URL path out of its CMD.
+  const health = text.match(/HEALTHCHECK[\s\S]*?CMD[\s\S]*?https?:\/\/[^/\s]+(\/[^\s"'|)\\]*)/i);
+  if (health?.[1]) meta.healthPath = health[1];
+
+  return meta;
+}
