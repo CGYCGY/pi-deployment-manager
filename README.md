@@ -6,7 +6,7 @@ update"* — and the manager does the work and returns a structured result. The 
 agent carries **zero** deployment knowledge or secrets.
 
 Sibling to `pi-4b-tester` / `pi-e2e-tester`; reuses their localhost-HTTP transport. See
-[`DESIGN.md`](./DESIGN.md) for the locked design and [`architecture.html`](./architecture.html) for
+[`DESIGN.md`](./docs/DESIGN.md) for the locked design and [`architecture.html`](./docs/architecture.html) for
 the visual overview.
 
 ## Why gated
