@@ -89,7 +89,8 @@ Mirrors the testers' two-door split. **Primary, build first:**
 | `project_dir` | yes      | **Absolute** path to the caller's repo. Manager operates in place — no clone. |
 | `subdomain`   | yes      | Caller-specified hostname label (locked decision). Manager validates against collisions. |
 | `intent`      | yes      | NL instruction.                                                       |
-| `env`         | no       | Extra env KEY=VALUE pairs to set on the app.                          |
+| `env`         | no       | Extra env KEY=VALUE pairs to set on the app (inline, for programmatic callers). |
+| `env_file`    | no       | Path **relative to `project_dir`** of a gitignored runtime dotenv file. The manager reads it **in-sandbox** and bulk-sets the vars on Coolify — secrets never cross the wire or sit in argv. |
 
 ### 3.2 Result (manager → caller) — clean, parseable
 
@@ -173,23 +174,32 @@ config. Projects stop carrying secrets. *(Locked.)*
 ## 6. DeployProfile registry — the DeviceProfile analog
 
 The framework/backend spread maps to a small pluggable registry (mirrors pi-e2e-tester's
-`spoke/profiles/` `DeviceProfile`). A project = **one frontend profile + optional backend addon(s)**,
-**auto-detected** from `project_dir`. Adding a target = drop one profile file.
+`spoke/profiles/` `DeviceProfile`). A project = **one primary profile + optional backend addon(s)**,
+**auto-detected** from `project_dir`. Adding a *framework* target = drop one profile file.
 
-`DeployProfile`: `{ id, detect(dir), dockerfile(dir), port, resourceHint, needsVolume, buildHints }`.
+`DeployProfile`: `{ id, detect(dir), dockerfile(dir), port, healthPath, inspect?(dir), resourceHint, needsVolume, buildHints }`.
+`inspect(dir)` resolves **per-project** facts the profile reads from the repo (port/volume/health) —
+the framework profiles omit it (static fields); the generic `dockerfile` profile implements it.
 
-### Frontend profiles
+### Primary profiles
 
 | id              | detect                                   | output / runtime           | Dockerfile           |
 |-----------------|------------------------------------------|----------------------------|----------------------|
-| `static-html`   | bare `index.html`, no build              | static                     | nginx                |
-| `react-spa`     | vite/CRA, client-only                    | static SPA                 | bun → nginx          |
-| `astro-static`  | `astro.config`, no SSR adapter           | static                     | bun → nginx (exists) |
-| `nextjs-node`   | `next` dep, server/App-Router features   | **standalone, run w/ bun** (default) | bun runtime |
-| `nextjs-static` | `next.config` `output: 'export'`         | static                     | bun → nginx          |
+| `static-html`   | bare `index.html`, no build              | static                     | **generated** nginx  |
+| `react-spa`     | vite/CRA, client-only                    | static SPA                 | **generated** bun → nginx |
+| `astro-static`  | `astro.config`, no SSR adapter           | static                     | **generated** bun → nginx |
+| `nextjs-node`   | `next` dep, server/App-Router features   | **standalone, run w/ bun** (default) | **generated** bun runtime |
+| `nextjs-static` | `next.config` `output: 'export'`         | static                     | **generated** bun → nginx |
+| `dockerfile`    | ships its own `Dockerfile` (fallback)    | **anything** (Bun/Go/Python/Rust/… server) | **the project's own**, used verbatim |
 
-Next.js mode is auto-detected from `next.config` (`output: 'export'` → static, else standalone run
-with bun). Every generated Dockerfile builds with `oven/bun` (`bun install --frozen-lockfile`).
+The framework profiles **generate** a Dockerfile (their value: a build pipeline the project doesn't
+ship); every generated one builds with `oven/bun` (`bun install --frozen-lockfile`). The generic
+**`dockerfile`** profile inverts this — it **honors the project's own Dockerfile** (`./Dockerfile`,
+else `./deploy/Dockerfile`) and reads what it declares: `EXPOSE` → the app port, `VOLUME` → a
+persistent volume, the `HEALTHCHECK` URL path → the health probe. So a plain backend in any language
+deploys with zero manager-side language knowledge. It is detected **last** (fallback), so a framework
+repo that happens to carry a Dockerfile still gets its build profile. Per-language *generator* profiles
+(`go-server`, `python-server`, for repos that ship no Dockerfile) are a future layer on this floor.
 
 ### Backend addons (compose with any frontend)
 
@@ -197,6 +207,11 @@ with bun). Every generated Dockerfile builds with `oven/bun` (`bun install --fro
 |-----------------|----------------------------------|----------------------------------------------------------------------------------|
 | `convex-cloud`  | `convex/` dir + `convex` dep     | **Backend-first**: `npx convex deploy` (Convex Cloud, `CONVEX_DEPLOY_KEY`) → capture prod URL → inject as **build-time** env into the frontend before its image build. |
 | `sqlite-volume` | node/bun server with a `.db`/sqlite dep | Mount a **persistent Coolify volume** for the db file (survives redeploys). Note backup as a follow-up. |
+
+A persistent volume can also come straight from the **`dockerfile` profile**: a `VOLUME ["/data"]`
+line in the project's own Dockerfile is read by `inspect()` into the same `PERSISTENT_STORAGES` spec
+(`<subdomain>-data:/data`) the sqlite addon emits. So a BYOD app declares its volume in the one place
+it already does — no separate config, no addon needed.
 
 **Convex = Convex Cloud** (locked) — managed, not self-hosted. The manager never deploys Convex onto
 the Coolify box; it only runs `convex deploy` and wires the resulting URL into the frontend env.
@@ -210,11 +225,11 @@ Bash/Edit/Read alongside them (§5.0).
 
 | verb       | r/w  | does                                                                              |
 |------------|------|----------------------------------------------------------------------------------|
-| `detect`   | read | inspect `project_dir` → select frontend profile + backend addons                 |
-| `scaffold` | write| generate `deploy/Dockerfile` (+ nginx conf, `/healthz`, `HEALTHCHECK`) from profile |
+| `detect`   | read | inspect `project_dir` → select profile (+ resolve its per-project port/volume/health) + backend addons |
+| `scaffold` | write| write `deploy/Dockerfile` from the profile — **generated** (framework) or the project's **own** (`dockerfile` profile) — plus `deploy.sh`, `.env.deploy` |
 | `convex`   | write| `convex deploy` → capture prod URL (runs before frontend build)                  |
 | `provision`| write| create Coolify app, image=`ghcr.io/<org>/<repo>`, set resource limits (initial)  |
-| `env`      | write| set app env vars (incl. injected Convex URL)                                     |
+| `env`      | write| set app env vars: auto `PUBLIC_BASE_URL` + caller's `env_file` runtime secrets (read in-sandbox) + injected Convex URL |
 | `dns`      | write| create/update the Cloudflare record for the **caller-specified** subdomain; set Coolify domain |
 | `deploy`   | write| build → push GHCR → trigger Coolify (runs `deploy/deploy.sh`)                     |
 | `redeploy` | write| API-only redeploy trigger (update path)                                          |
@@ -296,7 +311,14 @@ gitignored — same convention as pi-e2e-tester.
 - **Convex build-time inject** — written to the project's `.env.production` (read by the bun build).
   A project whose `.dockerignore` excludes `.env*` would miss it — revisit a Docker `--build-arg`
   path if that bites.
-- **Go (and other non-JS) profiles** — not covered; `detect` fails loud on them. Add a profile when needed.
+- **Go (and other non-JS) servers** — RESOLVED for any project that ships its own Dockerfile: the
+  generic **`dockerfile`** profile honors it (reads `EXPOSE`/`VOLUME`/`HEALTHCHECK`), so Bun/Go/Python/
+  Rust/… all deploy language-blind. Per-language *generator* profiles (for repos with no Dockerfile)
+  remain a future add.
+- **Runtime secrets** — RESOLVED: a gitignored `deploy/.env.runtime` (or any `--env-file` path),
+  read **in-sandbox** by the `env` verb and bulk-set on Coolify. Coolify is the live store; the file
+  is an optional declarative seed (omit on plain redeploys). `PUBLIC_BASE_URL` is **auto-derived** from
+  subdomain + zone, so the caller can't get the final URL wrong.
 - **Build host** — image build needs Docker + GHCR auth on whatever box runs the manager. Confirm
   the manager always runs where Docker is available (the user's single dev box for now).
 - **SQLite volume backups** — persistent volume gives durability across redeploys, not backups;

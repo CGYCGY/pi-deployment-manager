@@ -87,6 +87,7 @@
   .chip.fe{color:var(--accent);background:#0d2036;border:1px solid #1d3a5c}
   .chip.be{color:var(--pink);background:#2a1320;border:1px solid #4a2138}
   .chip.def{color:var(--green);background:#0f2014;border:1px solid #21402b}
+  .chip.gen{color:var(--amber,#d29922);background:#241a05;border:1px solid #463612}
   .compose{margin-top:14px;text-align:center;color:var(--dim);font-size:13px}
   .compose code{font:600 12.5px var(--mono);color:var(--ink)}
 
@@ -184,8 +185,8 @@
         <h4><span class="badge init">Initial</span> first-time deploy</h4>
         <p class="note" style="margin-top:0">trigger: Coolify has no app for this project (live check; .env.deploy app-uuid is a hint)</p>
         <ol class="steps">
-          <li><b>detect</b> → pick frontend profile + backend addons</li>
-          <li><b>scaffold</b> deploy/Dockerfile (+ /healthz, HEALTHCHECK)</li>
+          <li><b>detect</b> → pick profile (+ resolve port/volume/health) + backend addons</li>
+          <li><b>scaffold</b> deploy/Dockerfile — generated, or the project's own</li>
           <li><b>convex deploy</b> → capture prod URL <span class="note">(if convex)</span></li>
           <li>populate deploy/.env.deploy from <b>central creds</b></li>
           <li><b>provision</b> Coolify app + resource limits</li>
@@ -230,11 +231,12 @@
           <tr><td>astro-static</td><td><span class="chip fe">frontend</span></td><td>astro.config, no SSR adapter</td><td>bun → nginx <span class="note">(exists)</span></td></tr>
           <tr><td>nextjs-node</td><td><span class="chip fe">frontend</span> <span class="chip def">default</span></td><td>next dep, server / App-Router</td><td>standalone · bun server.js</td></tr>
           <tr><td>nextjs-static</td><td><span class="chip fe">frontend</span></td><td>next.config output:'export'</td><td>bun → nginx</td></tr>
+          <tr><td>dockerfile</td><td><span class="chip gen">generic</span> <span class="chip def">fallback</span></td><td>ships its own Dockerfile</td><td>project's own Dockerfile, verbatim — any stack</td></tr>
           <tr><td>convex-cloud</td><td><span class="chip be">backend addon</span></td><td>convex/ dir + convex dep</td><td>backend-first: convex deploy → inject URL</td></tr>
           <tr><td>sqlite-volume</td><td><span class="chip be">backend addon</span></td><td>server app + .db / sqlite dep</td><td>persistent Coolify volume</td></tr>
         </tbody>
       </table>
-      <div class="compose">project = <code>one frontend profile</code> + <code>optional backend addon(s)</code> &nbsp;·&nbsp; auto-detected &nbsp;·&nbsp; add a target = drop one file</div>
+      <div class="compose">project = <code>one primary profile</code> + <code>optional backend addon(s)</code> &nbsp;·&nbsp; auto-detected &nbsp;·&nbsp; <code>dockerfile</code> = generic fallback (honors the repo's own Dockerfile: EXPOSE / VOLUME / HEALTHCHECK)</div>
       <div class="legend">
         <span><span class="dot" style="background:var(--accent)"></span> frontend</span>
         <span><span class="dot" style="background:var(--pink)"></span> backend addon</span>
@@ -283,7 +285,7 @@
       <div class="verb"><div class="v">scaffold</div><span class="rw write">write</span><p>gen Dockerfile</p></div>
       <div class="verb"><div class="v">convex</div><span class="rw write">write</span><p>convex deploy → URL</p></div>
       <div class="verb"><div class="v">provision</div><span class="rw write">write</span><p>create app + limits</p></div>
-      <div class="verb"><div class="v">env</div><span class="rw write">write</span><p>set app env vars</p></div>
+      <div class="verb"><div class="v">env</div><span class="rw write">write</span><p>auto PUBLIC_BASE_URL + env_file secrets</p></div>
       <div class="verb"><div class="v">dns</div><span class="rw write">write</span><p>Cloudflare record</p></div>
       <div class="verb"><div class="v">deploy</div><span class="rw write">write</span><p>build → GHCR → ship</p></div>
       <div class="verb"><div class="v">redeploy</div><span class="rw write">write</span><p>API-only trigger</p></div>
@@ -331,7 +333,7 @@
         <div class="dec"><dt>stack reality</dt><dd>ONE Coolify VPS · ONE Cloudflare domain · every project = a subdomain on it.</dd></div>
       </dl>
     </div>
-    <p class="note">Status: BUILT — bun-based Dockerfiles inline per profile (validated vs the real ones). Open: Convex inject via .env.production vs --build-arg (.dockerignore caveat) · SQLite backups · stream progress vs final-only · a Go profile. Build host needs Docker+GHCR auth.</p>
+    <p class="note">Status: BUILT — bun-based Dockerfiles inline per framework profile, plus a generic <code>dockerfile</code> profile that honors a project's own Dockerfile (any stack — Bun/Go/Python/…). Runtime secrets via <code>--env-file</code> (read in-sandbox, never on the wire); PUBLIC_BASE_URL auto-derived. Open: Convex inject via .env.production vs --build-arg (.dockerignore caveat) · SQLite backups · stream progress vs final-only · per-language generator profiles. Build host needs Docker+GHCR auth.</p>
   </section>
 
 </div>

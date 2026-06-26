@@ -37,19 +37,27 @@ from LLM prose; a deploy is `ok` **only** when the deploy-health guard confirms 
 
 ## Profiles & addons
 
-Auto-detected from the project (one frontend profile + optional backend addons). Add a target = drop
-one profile file.
+Auto-detected from the project (one primary profile + optional backend addons). Add a *framework*
+target = drop one profile file.
 
-| frontend profile | detect | runtime |
+| primary profile | detect | runtime |
 |---|---|---|
-| `static-html` | bare `index.html` | nginx |
-| `react-spa` | `vite`/`react-scripts` + `react` | bun build → nginx |
-| `astro-static` | `astro.config`, no SSR adapter | bun → nginx |
-| `nextjs-node` (default) | `next` dep | standalone, run with `bun server.js` |
-| `nextjs-static` | `next.config` `output:'export'` | bun build → nginx |
+| `static-html` | bare `index.html` | **generated** nginx |
+| `react-spa` | `vite`/`react-scripts` + `react` | **generated** bun build → nginx |
+| `astro-static` | `astro.config`, no SSR adapter | **generated** bun → nginx |
+| `nextjs-node` (default) | `next` dep | **generated** standalone, `bun server.js` |
+| `nextjs-static` | `next.config` `output:'export'` | **generated** bun build → nginx |
+| `dockerfile` (fallback) | ships its own `Dockerfile` | **the project's own**, used verbatim — any stack |
+
+The framework profiles **generate** a Dockerfile. The generic **`dockerfile`** profile instead honors
+a project's **own** Dockerfile (`./Dockerfile`, else `./deploy/Dockerfile`) and reads what it declares
+— `EXPOSE` → port, `VOLUME` → a persistent volume, `HEALTHCHECK` URL → the health probe — so a plain
+Bun/Go/Python/Rust/… backend deploys with zero manager-side language knowledge. It's detected last, so
+a framework repo carrying a Dockerfile still gets its build profile.
 
 Addons: `convex-cloud` (deploy Convex Cloud backend-first, inject its prod URL as a build-time env)
-and `sqlite-volume` (mount a persistent Coolify volume for the db file).
+and `sqlite-volume` (mount a persistent Coolify volume for the db file). A `dockerfile`-profile app
+gets its volume straight from the Dockerfile's `VOLUME` line — no addon needed.
 
 ## Guards (fail-closed, in code)
 
@@ -83,11 +91,19 @@ project's gitignored `deploy/.env.deploy` at deploy time and never commits them.
 From any project, a project agent runs:
 
 ```sh
-/path/to/pi-deployment-manager/pi-deploy.sh <project_dir> <subdomain> "<intent>"
+/path/to/pi-deployment-manager/pi-deploy.sh <project_dir> <subdomain> "<intent>" [--env-file <path>]
 # e.g.
 pi-deploy.sh /abs/path/to/my-app myapp "initial deploy"
 pi-deploy.sh /abs/path/to/my-app myapp "redeploy after update"
+# with runtime secrets (path RELATIVE to <project_dir>):
+pi-deploy.sh /abs/path/to/my-app myapp "initial deploy" --env-file deploy/.env.runtime
 ```
+
+**Runtime env / secrets.** Pass `--env-file <path>` (relative to `project_dir`) pointing at a
+**gitignored** dotenv file (`KEY=VALUE`). The manager reads it **itself, in-sandbox**, and bulk-sets
+the vars on Coolify — so secrets never sit in argv, cross the RPC wire, or get committed. Coolify is the
+live store; the file is an optional declarative seed (omit it on plain redeploys that don't change env).
+`PUBLIC_BASE_URL` is **auto-derived** (`https://<subdomain>.<zone>`) and injected — don't set it yourself.
 
 `pi-deploy.sh` spawns the manager if it isn't already running (spawn-on-demand, not a daemon), waits
 for it to publish its endpoint (`<stateDir>/endpoint.json`), POSTs the deploy, and prints the JSON
