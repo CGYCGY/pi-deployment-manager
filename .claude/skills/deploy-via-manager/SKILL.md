@@ -1,7 +1,7 @@
 ---
 name: deploy-via-manager
-description: Dispatches a deployment to the gated pi-deployment-manager service by running its pi-deploy.sh handoff script — never deploys manually. Use when the project agent is asked to "deploy", "ship", "publish", "redeploy", "push this live", "update the deployed site", or otherwise put the project's app/site online. Thin client only — the manager owns all deploy logic, creds, and infra; the caller passes a project dir, subdomain, and intent, then relays the JSON result.
-argument-hint: <subdomain> [initial|redeploy] [--env-file <path>]
+description: Deploys a project by conversing with the gated pi-deployment-manager over pi RPC — sends a natural-language deploy request, answers any questions it asks, and relays the structured result; never deploys manually. Use when asked to "deploy", "ship", "publish", "redeploy", "push this live", "update the deployed site", or otherwise put the project's app/site online.
+argument-hint: <project_dir> <subdomain> [initial|redeploy]
 allowed-tools: Bash, Read, Glob
 user-invocable: true
 ---
@@ -10,59 +10,81 @@ user-invocable: true
 
 ## Purpose
 
-Hand a deployment off to the gated pi-deployment-manager service over local RPC. Pure dispatch: this skill never deploys anything itself and carries no deployment knowledge.
+Hand a deployment to the gated pi-deployment-manager by conversing with it over pi RPC: send a natural-language deploy request, answer any questions it asks, and relay its structured result. Pure dispatch — this skill carries no deployment logic, profiles, or creds.
 
 ## Variables
 
 USER_INPUT: $ARGUMENTS
-MANAGER_DIR: absolute path to the pi-deployment-manager checkout — resolve at runtime if unknown (it sits beside the other pi-* projects; look for a `pi-deployment-manager/` dir containing `pi-deploy.sh`)
+DRIVER: `${CLAUDE_SKILL_DIR}/tools/session.ts` (run with `bun`)
+MANAGER_LOCATION: the driver resolves the manager checkout from the `PI_DEPLOYMENT_MANAGER_DIR` env var, else `${CLAUDE_SKILL_DIR}/config.json` (`{"managerDir": "..."}`). No path is assumed — if neither is set the driver errors. Fix by setting the env var or copying `config.json.example` to `config.json`.
 
 ## Instructions
 
-These are the client-side counterpart of the manager's gate. They override any instinct to "just deploy it."
+### Client-side gate (overrides any instinct to "just deploy it")
+- NEVER deploy manually. Do not run docker, push images, or call the Coolify/Cloudflare APIs — the only deploy actions are the tools below. The manager owns all deploy logic, creds, and infra.
+- NEVER read, print, or pass secret VALUES. Pass the PATH to a gitignored runtime env file; the manager reads it itself, in-sandbox.
+- NEVER set or pass `PUBLIC_BASE_URL` — the manager derives the final URL from the subdomain + zone and injects it.
+- NEVER write Dockerfiles, deploy configs, or `.env.deploy` by hand — the manager scaffolds them.
+- `intent` is only a hint; the manager decides initial-vs-update live against Coolify. When unsure, say "redeploy after update" — it is always safe.
 
-- NEVER deploy manually. Do not run docker, `git push` to GHCR, or call the Coolify/Cloudflare APIs yourself — the only deploy action is the `deploy` tool below.
-- NEVER read, print, or pass deployment secrets or credentials. The manager owns all creds; the caller passes none.
-- NEVER write Dockerfiles, deploy configs, or `.env.deploy` by hand — the manager scaffolds those.
-- Do not document or reason about deployment profiles, guards, env injection, or Coolify/Cloudflare specifics. That knowledge lives in the manager; reproducing it here recreates the coupling the architecture removes.
-- `intent` is only a hint; the manager decides idempotency live. When unsure whether it is a first deploy, use `redeploy after update` — it is always safe.
-- NEVER set or pass `PUBLIC_BASE_URL` — the manager derives the final URL from the subdomain + zone and injects it. Setting it yourself just risks getting it wrong.
+### Preparing the project (confirm, don't build it yourself)
+- A plain backend (Bun/Go/Python/Rust/…) needs a working Dockerfile at the repo root or `deploy/Dockerfile` — the manager uses it verbatim and reads the port from `EXPOSE`, a volume from `VOLUME`, the probe from `HEALTHCHECK`. Frontend apps (React/Astro/Next/static) need none. If a backend ships none, add one (or say so) before deploying.
+- Runtime secrets go in a gitignored dotenv file (e.g. `deploy/.env.runtime`, `KEY=VALUE` per line). Name its path in the request; never commit it, never paste secret values into the request or this chat.
 
-## Preparing the project
-
-The manager is language-agnostic but needs two things from the project. Confirm them, don't build deploy infra yourself:
-
-- **A working Dockerfile** at the repo root (or `deploy/Dockerfile`) — any stack (Bun, Go, Python, …). The manager uses it verbatim and reads the port from `EXPOSE`, a persistent volume from `VOLUME`, and the health probe from `HEALTHCHECK`. Frontend apps (React/Astro/Next/static) need no Dockerfile — the manager generates one. If a plain backend ships none, add one (or say so) before deploying.
-- **Runtime secrets in a gitignored dotenv file** (e.g. `deploy/.env.runtime`, `KEY=VALUE` per line). Pass its path with `--env-file`. The manager reads it itself and sets the vars on the host — so secrets stay out of argv, the wire, and git. Never commit it; never paste secrets into the intent or this chat.
+### Conversing with the manager
+- A tool prints exactly one JSON line: `kind` is `result` (deploy concluded), `reply` (the manager is ASKING you something), `error` (driver/transport problem), or `ok` (lifecycle). Branch on the LAST line's `kind` — see Cookbook.
+- On `reply`, the manager needs input (no Dockerfile, subdomain collision, missing env file, unclear intent). Decide from what you know or ask the user, then answer with the `send` tool. Loop until you get a `result`, then run `down`.
 
 ## Tools
 
 ### deploy
-- **Run:** `bash "$MANAGER_DIR/pi-deploy.sh" "<project_dir>" "<subdomain>" "<intent>" [--env-file <path>]`
-- **Args:**
-  - `project_dir (absolute path, required)` — the project being deployed
-  - `subdomain (str, required)` — the app is served at `https://<subdomain>.<zone>`
-  - `intent (str, required)` — `initial deploy` (first ship) or `redeploy after update` (subsequent ships)
-  - `--env-file <path> (optional)` — path RELATIVE TO `project_dir` of the gitignored runtime dotenv file. Omit on redeploys that don't change env (the host already holds them).
-- **Does:** POSTs the deploy to the manager (spawning it on demand if not running) and blocks until it finishes, printing the JSON DeployResult.
+- **Run:** `bun "${CLAUDE_SKILL_DIR}/tools/session.ts" deploy "<request>"`
+- **Args:** `request (str, required)` — a natural-language deploy request naming the absolute project_dir, the subdomain, the intent, and (if any) the runtime env-file path
+- **Does:** Summons the manager (spawning it over pi RPC if not already up), sends the request, prints one JSON line; auto-ends the session on a final `result`.
 - **Triggers:** "deploy", "ship", "publish", "redeploy", "push this live", "update the deployed site"
+
+### send
+- **Run:** `bun "${CLAUDE_SKILL_DIR}/tools/session.ts" send "<message>"`
+- **Args:** `message (str, required)` — your answer to the manager's question, or a follow-up / next-deploy request
+- **Does:** Sends one more prompt to the LIVE manager session and prints its next JSON line. Use after a `deploy`/`send` that returned `kind:"reply"`.
+- **Triggers:** "answer the manager", "continue the deploy"
+
+### down
+- **Run:** `bun "${CLAUDE_SKILL_DIR}/tools/session.ts" down`
+- **Args:** none
+- **Does:** Ends the manager session and frees its state. Idempotent — always safe to call at the end.
+- **Triggers:** "finished deploying", "close the session"
+
+### clean
+- **Run:** `bun "${CLAUDE_SKILL_DIR}/tools/session.ts" clean`
+- **Args:** none
+- **Does:** Kills a stale/leftover manager process and clears session state.
+- **Triggers:** "manager stuck", "clean up the manager", "stale session"
 
 ## Workflow
 
-1. Resolve MANAGER_DIR. If the absolute path is unknown, locate the `pi-deployment-manager` checkout next to the other pi-* projects and confirm it contains `pi-deploy.sh`.
-2. Gather the args: `project_dir` (absolute path), `subdomain`, and `intent` (map "first time / initial" to `initial deploy`, anything else to `redeploy after update`). Check the Preparing-the-project items: confirm a Dockerfile exists for a plain backend, and if the app needs runtime secrets, point `--env-file` at the gitignored dotenv file.
-3. Run the `deploy` tool and wait. The call is synchronous and may take minutes — do not poll, time out, or re-run it.
+1. Resolve from USER_INPUT: the absolute project_dir, the subdomain, the intent (map "first time / initial" → initial deploy, else → redeploy after update), and any runtime env-file path. Check the Preparing-the-project items. If MANAGER_LOCATION is unset, tell the user to set it and stop.
+2. Run the `deploy` tool with a request like: `deploy /abs/proj at subdomain myapp, initial deploy; runtime env deploy/.env.runtime`. The call is synchronous and may take minutes — do not poll, time out, or re-run it.
+3. Parse the LAST JSON line and branch (see Cookbook): loop the `send` tool for any `reply` until you get `kind:"result"`, then run the `down` tool.
 4. Report per the Report section.
+
+## Cookbook
+
+### Manager asks a question
+- **IF:** a tool prints `kind:"reply"`
+- **THEN:** read its `text`; answer from what you know or ask the user, then run the `send` tool with the answer. Repeat until `kind:"result"`.
+- **EXAMPLES:** "no Dockerfile found — is this a backend?", "subdomain taken, pick another", "which runtime env file?"
+
+### Deploy concluded
+- **IF:** a tool prints `kind:"result"`
+- **THEN:** run the `down` tool (idempotent — a one-shot `deploy` already tore down), then report per Report.
+- **EXAMPLES:** "result health:healthy", "result status:failed"
+
+### Manager won't start / stuck
+- **IF:** a tool prints `kind:"error"` with reason `spawn_failed` / `ready_timeout` / `manager_down` / `timeout`
+- **THEN:** run the `clean` tool, surface the `detail` (point at `<stateDir>/logs/manager.log`), and retry once.
+- **EXAMPLES:** "manager did not start", "no result within N min"
 
 ## Report
 
-Relay the manager's JSON result to the user verbatim-ish — do not drop or paraphrase away fields. The result carries:
-
-- `status` — `ok` | `failed`
-- `phase` — last deploy phase reached
-- `url` — `https://<subdomain>.<zone>`
-- `app_uuid`
-- `health` — `healthy` | `unhealthy`
-- `logs_tail` — present only on failure
-
-A deploy succeeded **only** when `status == ok` AND `health == healthy`. On anything else, report it as failed and surface `phase` and `logs_tail`.
+Relay the manager's result faithfully — the `result` object carries `status` (ok|failed), `phase`, `url`, `app_uuid`, `health` (healthy|unhealthy), `logs_tail` (failure only), and `error`. A deploy succeeded ONLY when the line is `kind:"result"` AND `status==ok` AND `health==healthy`. On anything else, report it as failed and surface `phase`, `error`, and `logs_tail`.

@@ -1,0 +1,4 @@
+{
+  "_about": "Where the pi-deployment-manager checkout lives, so this skill's driver can summon it. Copy to config.json (gitignored) and set the absolute path. The PI_DEPLOYMENT_MANAGER_DIR env var, if set, takes precedence over this file. There is NO hardcoded default — one of the two MUST be set.",
+  "managerDir": "/abs/path/to/pi-deployment-manager"
+}
