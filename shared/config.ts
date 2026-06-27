@@ -44,6 +44,15 @@ export interface CloudflareConfig {
   api_token: string;
   zone_id: string;
   zone_name: string;
+  /**
+   * How a subdomain is pointed at the app — depends on how the Coolify server is exposed:
+   *   "@" (default)            → proxied CNAME to the zone apex (server behind a Cloudflare Tunnel)
+   *   "<host>" (e.g. *.cfargotunnel.com) → proxied CNAME to that host
+   *   "server-ip"              → proxied A record to the Coolify server's public IP
+   * Cloudflare rejects proxied A records to private/CGNAT IPs, so a Tailscale-only server MUST
+   * use a CNAME mode.
+   */
+  dns_target: string;
 }
 
 /** GHCR/GitHub org images are pushed under. */
@@ -121,6 +130,7 @@ function parseConfig(raw: unknown): Config {
       api_token: reqStr(cloudflare, "cloudflare", "api_token"),
       zone_id: reqStr(cloudflare, "cloudflare", "zone_id"),
       zone_name: reqStr(cloudflare, "cloudflare", "zone_name"),
+      dns_target: optStr(cloudflare, "dns_target") ?? "@",
     },
     registry: {
       github_org: reqStr(registry, "registry", "github_org"),

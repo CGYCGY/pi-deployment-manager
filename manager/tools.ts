@@ -430,14 +430,28 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
       await assertSubdomainFree(d.subdomain, cf.zone_name, appUuid); // ours is allowed; throws (recoverable) on a foreign collision
       assertTargetsOurApp(d.project_dir, appUuid);
 
-      const ip = await getServerIp();
-      await createRecord("A", fqdn, ip, "true"); // proxied through Cloudflare
+      // How the subdomain is pointed at the app depends on how the server is exposed (config
+      // cloudflare.dns_target). Default "@" = proxied CNAME to the zone apex, for a server behind
+      // a Cloudflare Tunnel (only a Tailscale/CGNAT IP — Cloudflare rejects a proxied A record to
+      // such an IP, which was the first deploy's DNS failure). "server-ip" = A record for a real
+      // public IP; any other value = a CNAME to that host (e.g. a *.cfargotunnel.com hostname).
+      const target = cf.dns_target;
+      let record: string;
+      if (target === "server-ip") {
+        const ip = await getServerIp();
+        await createRecord("A", fqdn, ip, "true");
+        record = `A -> ${ip}`;
+      } else {
+        const cname = target === "@" ? cf.zone_name : target;
+        await createRecord("CNAME", fqdn, cname, "true");
+        record = `CNAME -> ${cname}`;
+      }
       await updateAppDomain(appUuid, url);
       writeEnvDeploy(d.project_dir, { domain: fqdn, subdomain: d.subdomain });
 
       d.ledger.url = url;
       d.ledger.phase = "dns-set";
-      return ok(`DNS: ${fqdn} -> ${ip} (proxied); Coolify app domain set to ${url}.`, { url, fqdn, ip });
+      return ok(`DNS: ${fqdn} ${record} (proxied); Coolify app domain set to ${url}.`, { url, fqdn });
     },
   });
 

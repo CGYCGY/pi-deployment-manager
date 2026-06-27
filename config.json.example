@@ -16,7 +16,9 @@
     "_note": "The one Cloudflare zone/domain; every project becomes a subdomain on it.",
     "api_token": "CHANGE-ME-cloudflare-token-dns-edit",
     "zone_id": "CHANGE-ME-cloudflare-zone-id",
-    "zone_name": "example.com"
+    "zone_name": "example.com",
+    "_dns_target": "How a subdomain points at the app. '@' (default) = proxied CNAME to the zone apex, for a server behind a Cloudflare Tunnel. A hostname = proxied CNAME to it (e.g. <id>.cfargotunnel.com). 'server-ip' = proxied A record to the server's PUBLIC IP (rejected for Tailscale/CGNAT IPs).",
+    "dns_target": "@"
   },
 
   "registry": {
