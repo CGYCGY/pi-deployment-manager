@@ -1,11 +1,12 @@
 # pi-deployment-manager
 
 A standalone, **heavily-gated single-purpose** deployment service built on [pi](../pi-references).
-Any of your projects hands off a deploy over local RPC — *"deploy this"* / *"redeploy after
-update"* — and the manager does the work and returns a structured result. The calling project
-agent carries **zero** deployment knowledge or secrets.
+A project agent **summons** it over pi's native RPC mode and **converses** with it in plain
+language — *"deploy /abs/path/to/app at subdomain `myapp`"* / *"redeploy after update"* — and the
+manager's own LLM drives the work, asks back when it is blocked, and returns a structured result.
+The calling project agent carries **zero** deployment knowledge or secrets.
 
-Sibling to `pi-4b-tester` / `pi-e2e-tester`; reuses their localhost-HTTP transport. See
+Driven agent-to-agent, mirroring how the sibling `pi-e2e-tester` is summoned over RPC. See
 [`DESIGN.md`](./docs/DESIGN.md) for the locked design and [`architecture.html`](./docs/architecture.html) for
 the visual overview.
 
@@ -13,8 +14,9 @@ the visual overview.
 
 The manager LLM has **no raw `bash`/`read`/`write`/`edit`/`glob`** — it is launched with
 `--no-builtin-tools`, so the only tools that *exist* are the ten deployment verbs the extension
-registers. Their code enforces a path sandbox (it may only write a project's `deploy/` directory,
-`.gitignore`, and `.env.production`) and three fail-closed guards. The wrong action is
+registers (and on session start `setActiveTools` re-pins the active set to exactly those ten,
+belt-and-braces). Their code enforces a path sandbox (it may only write a project's `deploy/`
+directory, `.gitignore`, and `.env.production`) and three fail-closed guards. The wrong action is
 *unrepresentable*, not merely discouraged. One purpose, one agent, one deploy at a time.
 
 Talking to Coolify and Cloudflare is **native HTTP in the verb code** — no shelling out, no external
@@ -28,12 +30,17 @@ is fully standalone — clone, `npm install`, run; nothing outside the repo.
 `detect` · `scaffold` · `convex` · `provision` · `env` · `dns` · `deploy` · `redeploy` · `status` ·
 `logs`. `read ≠ write`: `detect`/`status`/`logs` never mutate infra.
 
+`detect` is the entry verb: the manager's LLM extracts `project_dir` (absolute), `subdomain`, and an
+optional `env_file` from the caller's request and passes them to `detect`, which **binds the deploy
+context** every later verb reads (the context persists across turns until the deploy concludes).
+
 - **Initial deploy:** `detect → scaffold → [convex] → provision → env → dns → deploy`
 - **Update deploy:** `detect → [convex if backend changed] → redeploy`
 
 Idempotency (initial vs update) is decided **live against Coolify** — `deploy/.env.deploy` is only a
-hint. The client result is built **in code from a per-deploy ledger** the verbs write, never parsed
-from LLM prose; a deploy is `ok` **only** when the deploy-health guard confirms the app is serving.
+hint. The result is built **in code from a per-deploy ledger** the verbs write and emitted to the
+caller on a `notify` channel — never parsed from LLM prose; a deploy is `ok` **only** when the
+deploy-health guard confirms the app is serving.
 
 ## Profiles & addons
 
@@ -88,30 +95,38 @@ project's gitignored `deploy/.env.deploy` at deploy time and never commits them.
 
 ## Handing off a deploy
 
-From any project, a project agent runs:
+A project agent never deploys by hand — it uses the **`deploy-via-manager` skill**, whose driver
+(a `bun` tool) summons the manager and relays the result. The driver, not this repo, owns the RPC
+plumbing — the same split as `pi-e2e-tester`, whose driver lives in the consuming project's skill,
+not the tester repo. The driver locates this checkout from the `PI_DEPLOYMENT_MANAGER_DIR` env var
+or a skill-local config — never a hardcoded path.
 
-```sh
-/path/to/pi-deployment-manager/pi-deploy.sh <project_dir> <subdomain> "<intent>" [--env-file <path>]
-# e.g.
-pi-deploy.sh /abs/path/to/my-app myapp "initial deploy"
-pi-deploy.sh /abs/path/to/my-app myapp "redeploy after update"
-# with runtime secrets (path RELATIVE to <project_dir>):
-pi-deploy.sh /abs/path/to/my-app myapp "initial deploy" --env-file deploy/.env.runtime
-```
+The driver spawns the manager with **`pi --mode rpc`** (stdin/stdout JSONL — no HTTP server, no TCP
+port, no token, no portfile) and sends a natural-language prompt:
 
-**Runtime env / secrets.** Pass `--env-file <path>` (relative to `project_dir`) pointing at a
-**gitignored** dotenv file (`KEY=VALUE`). The manager reads it **itself, in-sandbox**, and bulk-sets
-the vars on Coolify — so secrets never sit in argv, cross the RPC wire, or get committed. Coolify is the
-live store; the file is an optional declarative seed (omit it on plain redeploys that don't change env).
-`PUBLIC_BASE_URL` is **auto-derived** (`https://<subdomain>.<zone>`) and injected — don't set it yourself.
+> Deploy `/abs/path/to/my-app` at subdomain `myapp`; runtime secrets in `deploy/.env.runtime`.
 
-`pi-deploy.sh` spawns the manager if it isn't already running (spawn-on-demand, not a daemon), waits
-for it to publish its endpoint (`<stateDir>/endpoint.json`), POSTs the deploy, and prints the JSON
-result. The POST **blocks until the deploy completes** (synchronous RPC) — the caller needs no
-server of its own. For programmatic use, import `deploy()` from [`manager/client.ts`](./manager/client.ts).
+The manager's LLM reads it, calls `detect` to bind the deploy, and runs the verbs. The driver's
+subcommands: `up` (boot a manager, wait for its `PIDEPLOY_READY`), `send` / `deploy` (send a prompt
+and capture the result), `down`, `clean`.
 
-> The manager runs as an interactive `pi` session. If your environment can't run `pi` headless
-> (no TTY), launch it once in a window with `./launch-manager.sh`; `pi-deploy.sh` reuses a live endpoint.
+**Back-and-forth.** If the manager is blocked or something is ambiguous — no Dockerfile for a plain
+backend, a subdomain collision, a missing `env_file`, unclear intent — it **asks the caller in plain
+language and ends its turn**. The caller answers with a follow-up prompt (via `send`) and the manager
+continues with full context: the deploy context persists across turns until the deploy concludes.
+
+**Result.** A deploy **concludes** only when a ship verb (`deploy` / `redeploy`) health-checks the
+app (or the build fails) — the only terminal points. The structured `DeployResult` is built **in code
+from the verb ledger** and emitted on a `notify` channel as `PIDEPLOY_RESULT <json>`, which the driver
+captures (the agent's plain text is only a summary or a question, never the result). On boot the
+manager emits `PIDEPLOY_READY` so the driver can confirm it actually booted.
+
+**Runtime env / secrets.** Name a **gitignored** dotenv file (`KEY=VALUE`) via `env_file` — a path
+relative to `project_dir`. The manager reads it **itself, in-sandbox**, and bulk-sets the vars on
+Coolify — so only the *path* travels (in the prompt), never the secret values, and nothing is committed.
+Coolify is the live store; the file is an optional declarative seed (omit it on plain redeploys that
+don't change env). `PUBLIC_BASE_URL` is **auto-derived** (`https://<subdomain>.<zone>`) and injected —
+don't set it yourself.
 
 The result:
 

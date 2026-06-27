@@ -132,11 +132,12 @@
 <div class="wrap">
 
   <header class="hero">
-    <span class="tag">● Design locked · pre-implementation</span>
+    <span class="tag">● Built · summoned over pi RPC mode</span>
     <h1><span>pi-deployment-manager</span> — architecture</h1>
-    <p class="sub">A standalone agentic <b>deployment service</b> on pi. Any project's agent hands off
-      a deploy over RPC; the manager owns all deployment knowledge, creds, and infra state, does the
-      work, and returns a structured result.</p>
+    <p class="sub">A standalone agentic <b>deployment service</b> on pi. A project's agent <b>summons</b>
+      it over pi's native RPC mode and <b>converses</b> with it in natural language; the manager owns all
+      deployment knowledge, creds, and infra state, does the work (asking back when blocked), and returns
+      a structured result.</p>
     <div class="meta">sibling of pi-4b-tester · pi-e2e-tester &nbsp;·&nbsp; 2026-06-25 &nbsp;·&nbsp; realizes the pi-4b "expose hub via RPC" roadmap</div>
   </header>
 
@@ -148,22 +149,23 @@
         <div class="role">Client</div>
         <h3>Any project agent</h3>
         <p>Next.js / React / HTML / Astro repo. Carries <b>zero</b> deployment knowledge or secrets.
-           Just sends the task.</p>
+           <b>Converses</b> in plain language via the <code style="font-family:var(--mono)">deploy-via-manager</code> skill driver.</p>
       </div>
 
       <div class="arrowcol">
-        <div class="rpc">POST /deploy<br><small>localhost HTTP · bearer token · requestId</small></div>
+        <div class="rpc">pi --mode rpc<br><small>stdin/stdout JSONL · no port · no token</small></div>
         <div class="flowline"></div>
-        <div class="rpc"><small>{ project_dir, subdomain, intent }</small></div>
+        <div class="rpc"><small>NL prompt: "deploy &lt;dir&gt; at &lt;subdomain&gt;"</small></div>
         <div class="backline"></div>
-        <div class="rpc"><small>{ status, url, health, … }</small></div>
+        <div class="rpc"><small>↔ asks back when blocked · PIDEPLOY_RESULT on notify</small></div>
       </div>
 
       <div class="node service">
         <div class="role">Service · gated</div>
         <h3>pi-deployment-manager</h3>
         <p><b>Heavily gated:</b> no raw Bash/Edit/Read — only the 10 verbs. Native Coolify/Cloudflare
-           HTTP, all creds, the profile registry &amp; guards. <b>Spawn-on-demand</b>, runs <b>in place</b> on the repo.</p>
+           HTTP, all creds, the profile registry &amp; guards. The skill driver <b>spawns it on demand</b>
+           as a <code style="font-family:var(--mono)">pi --mode rpc</code> subprocess; it runs <b>in place</b> on the repo.</p>
       </div>
     </div>
 
@@ -179,13 +181,13 @@
 
   <!-- FLOWS -->
   <section>
-    <h2>2 · The two flows — one NL door, branch on live Coolify state</h2>
+    <h2>2 · The two flows — one NL prompt, branch on live Coolify state</h2>
     <div class="grid2">
       <div class="card pad flow">
         <h4><span class="badge init">Initial</span> first-time deploy</h4>
         <p class="note" style="margin-top:0">trigger: Coolify has no app for this project (live check; .env.deploy app-uuid is a hint)</p>
         <ol class="steps">
-          <li><b>detect</b> → pick profile (+ resolve port/volume/health) + backend addons</li>
+          <li><b>detect</b> → bind ctx (project_dir/subdomain/env_file from the prompt) + pick profile + addons</li>
           <li><b>scaffold</b> deploy/Dockerfile — generated, or the project's own</li>
           <li><b>convex deploy</b> → capture prod URL <span class="note">(if convex)</span></li>
           <li>populate deploy/.env.deploy from <b>central creds</b></li>
@@ -194,7 +196,7 @@
           <li><span class="g">⛔ subdomain-collision guard</span></li>
           <li><b>dns</b> — create record + set Coolify domain</li>
           <li><b>deploy</b> — build → GHCR → Coolify webhook</li>
-          <li><span class="g">⛔ deploy-health guard</span> → return {url}</li>
+          <li><span class="g">⛔ deploy-health guard</span> → conclude → emit result on notify</li>
         </ol>
       </div>
 
@@ -202,10 +204,10 @@
         <h4><span class="badge upd">Update</span> redeploy after change</h4>
         <p class="note" style="margin-top:0">trigger: Coolify already has this app (live check) → API-only</p>
         <ol class="steps">
-          <li><b>detect</b> → recognized as already set up</li>
+          <li><b>detect</b> → binds ctx; recognized as already set up</li>
           <li><b>convex deploy</b> + re-inject URL <span class="note">(if backend changed)</span></li>
           <li><b>redeploy</b> — re-run deploy.sh (build → GHCR → webhook)</li>
-          <li><span class="g">⛔ deploy-health guard</span> → return</li>
+          <li><span class="g">⛔ deploy-health guard</span> → conclude → emit result</li>
         </ol>
         <div style="margin-top:22px;border-top:1px dashed #30363d;padding-top:16px">
           <h4 style="margin-bottom:8px">Image-based pipeline</h4>
@@ -274,14 +276,14 @@
         <p class="note" style="margin-top:10px">This allowlist <b>is</b> the "only touch deploy/, never other files" guarantee.</p>
       </div>
     </div>
-    <p class="note">1 purpose · 1 agent · 1 deploy at a time — the pi-e2e-tester spoke philosophy: a closed, semantic surface, not raw access.</p>
+    <p class="note">Two-layer gate: <code>--no-builtin-tools</code> makes bash/read/write/edit/glob unrepresentable, and <code>setActiveTools</code> re-pins the active set to exactly the 10 verbs on session start (belt-and-braces). 1 purpose · 1 agent · 1 deploy at a time — the pi-e2e-tester spoke philosophy: a closed, semantic surface, not raw access.</p>
   </section>
 
   <!-- VERBS -->
   <section>
     <h2>5 · Verb surface — the manager's ONLY tools (read ≠ write)</h2>
     <div class="verbs">
-      <div class="verb"><div class="v">detect</div><span class="rw read">read</span><p>pick profile + addons</p></div>
+      <div class="verb"><div class="v">detect</div><span class="rw read">read</span><p>takes project_dir/subdomain/env_file → binds ctx + pick profile + addons</p></div>
       <div class="verb"><div class="v">scaffold</div><span class="rw write">write</span><p>gen Dockerfile</p></div>
       <div class="verb"><div class="v">convex</div><span class="rw write">write</span><p>convex deploy → URL</p></div>
       <div class="verb"><div class="v">provision</div><span class="rw write">write</span><p>create app + limits</p></div>
@@ -292,7 +294,7 @@
       <div class="verb"><div class="v">status</div><span class="rw read">read</span><p>deployment status</p></div>
       <div class="verb"><div class="v">logs</div><span class="rw read">read</span><p>tail app logs</p></div>
     </div>
-    <p class="note">read-only verbs (detect / status / logs) never mutate infra — the testers' durable "read ≠ send" lesson.</p>
+    <p class="note">Only <code>detect</code> takes the deploy's coordinates; every later verb reads its target from the <b>bound context</b> detect set, and they mutate a ledger the result is built from — never prose. read-only verbs (detect / status / logs) never mutate infra — the testers' durable "read ≠ send" lesson.</p>
   </section>
 
   <!-- GUARDS -->
@@ -320,9 +322,11 @@
     <h2>7 · Locked decisions at a glance</h2>
     <div class="card pad">
       <dl style="margin:0">
-        <div class="dec"><dt>transport</dt><dd>Reuse pi-4b/e2e <b>localhost-HTTP RPC</b> (token + requestId). <code style="font-family:var(--mono);color:var(--faint)">pi -p</code> headless = fallback.</dd></div>
-        <div class="dec"><dt>lifecycle</dt><dd><b>Spawn-on-demand</b>, no daemon — deploys are infrequent; nothing to babysit.</dd></div>
-        <div class="dec"><dt>doors</dt><dd>NL <b>deploy(project_dir, subdomain, intent)</b> first. Deterministic typed door deferred.</dd></div>
+        <div class="dec"><dt>transport</dt><dd><b>pi's native RPC mode</b> — stdin/stdout JSONL; no HTTP server, no port, no token. The skill driver owns the process pipes.</dd></div>
+        <div class="dec"><dt>lifecycle</dt><dd><b>Spawn-on-demand</b> by the skill driver (<code style="font-family:var(--mono)">pi --mode rpc</code>), no daemon — deploys are infrequent; nothing to babysit.</dd></div>
+        <div class="dec"><dt>interface</dt><dd><b>NL conversation</b> — the LLM reads the prompt; <b>detect</b> takes project_dir/subdomain/env_file. Blocked ⇒ it asks back. Typed door deferred.</dd></div>
+        <div class="dec"><dt>driver</dt><dd>Lives in the <b>deploy-via-manager skill</b> (not this repo); resolves this checkout via <code style="font-family:var(--mono)">PI_DEPLOYMENT_MANAGER_DIR</code> / skill config — never hardcoded.</dd></div>
+        <div class="dec"><dt>result</dt><dd>Built <b>in code from the ledger</b>, emitted on a <b>notify</b> channel (<code style="font-family:var(--mono)">PIDEPLOY_RESULT</code>); a deploy concludes only when a ship verb health-checks the app.</dd></div>
         <div class="dec"><dt>project access</dt><dd>Both modes, <b>operate in place</b> — no clone. Initial writes+commits; update is API-only.</dd></div>
         <div class="dec"><dt>subdomain</dt><dd><b>Caller-specified</b> per deploy; collision-guarded against the single shared domain.</dd></div>
         <div class="dec"><dt>gating</dt><dd><b>No raw Bash/Edit/Read</b> — only the 10 verbs. Read project / write-deploy allowlist, enforced in tool code.</dd></div>
@@ -333,7 +337,7 @@
         <div class="dec"><dt>stack reality</dt><dd>ONE Coolify VPS · ONE Cloudflare domain · every project = a subdomain on it.</dd></div>
       </dl>
     </div>
-    <p class="note">Status: BUILT — bun-based Dockerfiles inline per framework profile, plus a generic <code>dockerfile</code> profile that honors a project's own Dockerfile (any stack — Bun/Go/Python/…). Runtime secrets via <code>--env-file</code> (read in-sandbox, never on the wire); PUBLIC_BASE_URL auto-derived. Open: Convex inject via .env.production vs --build-arg (.dockerignore caveat) · SQLite backups · stream progress vs final-only · per-language generator profiles. Build host needs Docker+GHCR auth.</p>
+    <p class="note">Status: BUILT — bun-based Dockerfiles inline per framework profile, plus a generic <code>dockerfile</code> profile that honors a project's own Dockerfile (any stack — Bun/Go/Python/…). Runtime secrets via <code>env_file</code> named in the prompt (read in-sandbox — only the path travels, never the values); PUBLIC_BASE_URL auto-derived. Open: Convex inject via .env.production vs --build-arg (.dockerignore caveat) · SQLite backups · relaying per-phase progress (the driver already sees the full RPC event stream) vs final-only · per-language generator profiles. Build host needs Docker+GHCR auth.</p>
   </section>
 
 </div>

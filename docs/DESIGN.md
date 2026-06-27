@@ -1,14 +1,17 @@
 # pi-deployment-manager — Locked Design
 
-> Standalone agentic **deployment service**, built on pi. Any of the user's projects
-> hands off a deploy task via RPC; the manager owns all deployment knowledge, creds,
-> and infra state and does the work, returning a structured result. Sibling to
-> `pi-4b-tester/` and `pi-e2e-tester/`; reuses their hub transport.
+> Standalone agentic **deployment service**, built on pi. A project agent **summons** the manager
+> over pi's native RPC mode and **converses** with it in natural language; the manager owns all
+> deployment knowledge, creds, and infra state, does the work, and returns a structured result.
+> Sibling to `pi-4b-tester/` and `pi-e2e-tester/`; driven the same agent-to-agent way `pi-e2e-tester`
+> is summoned over RPC.
 >
 > Status: **BUILT** (2026-06-25) — its own git repo on `main`. Implementation deviations from the
 > original design are folded into the sections below: idempotency is decided **live against Coolify**
 > (not a `.env.deploy` file signal), all generated Dockerfiles use **bun** (the stack standard), the
-> RPC is **synchronous** (POST blocks, result is the body), and first-deploy files are **staged, not
+> manager is now summoned over **pi's native RPC mode** (stdin/stdout JSONL — no HTTP server, no
+> port, no token; the earlier custom localhost-HTTP server was removed), the client **driver lives in
+> the `deploy-via-manager` skill** (not this repo), and first-deploy files are **staged, not
 > committed** (the caller owns the commit).
 
 ---
@@ -44,58 +47,70 @@ target (phone/browser) open across many actions. The deployment manager is **dif
 
 ```
 project agent (client)                       pi-deployment-manager (service)
-  │  POST /deploy {project_dir,                 │  detect → scaffold → [convex] →
-  │   subdomain, intent}  ── token, requestId ─▶│  provision → env → dns → ship →
-  │                                             │  health-check
-  │  ◀───────── structured result ─────────────│  (Coolify + Cloudflare = source of truth)
+  │  NL prompt: "deploy <dir> at <subdomain>"   │  detect (binds ctx) → scaffold → [convex] →
+  │  ── pi --mode rpc · stdin/stdout JSONL ────▶│  provision → env → dns → ship → health-check
+  │  ◀── question (blocked/ambiguous) ──────────│  (asks the caller; turn ends; context persists)
+  │  ── follow-up prompt (answer) ─────────────▶│  continues …
+  │  ◀── PIDEPLOY_RESULT <json> on notify ──────│  (Coolify + Cloudflare = source of truth)
 ```
 
 ### 2.1 Lifecycle — spawn-on-demand, NOT a daemon
 
-Deploys are infrequent (initial once; redeploy on update). Running a permanent localhost daemon is
-infra to babysit on the user's single box. Instead the client **spawns** the manager per session
-(reusing the testers' `launch-spoke.sh` pattern), POSTs the task, gets the result. Because the
-source of truth is the Coolify/Cloudflare APIs, spawn-on-demand is correct — there is no warm state
-to lose. *(Decision; revisit only if a use case needs an always-on endpoint.)*
+Deploys are infrequent (initial once; redeploy on update). Running a permanent daemon is infra to
+babysit on the user's single box. Instead the **skill driver spawns** the manager as a `pi --mode
+rpc` subprocess it owns: `up` boots one and keeps it alive across calls (a fix→redeploy loop reuses
+it), or a one-shot `deploy` cold-starts and tears it down on the result. Because the source of truth
+is the Coolify/Cloudflare APIs, spawn-on-demand is correct — there is no warm state to lose. *(Decision;
+revisit only if a use case needs an always-on endpoint.)*
 
-### 2.2 Transport — reuse the shared localhost-HTTP RPC
+### 2.2 Transport — pi's native RPC mode
 
-Reuse pi-4b/pi-e2e transport verbatim: **localhost HTTP POST, bearer-token auth, `requestId`
-correlation**. Endpoint: `POST /deploy`. Rationale over `pi -p` headless one-shot: consistency with
-the existing stack (shared transport code), correlated structured results, and room to stream
-multi-step progress back to the caller. *(This is the one transport sub-choice; `pi -p` is the
-simpler fallback if HTTP proves overkill.)*
+The manager is summoned over **`pi --mode rpc`**: the driver writes prompts to the subprocess's
+stdin and reads its event stream (assistant turns + `notify` events) off stdout, as JSONL. There is
+**no HTTP server, no network port, no auth token, no portfile** — the driver owns the process pipes.
+The structured result rides a `notify` event (`PIDEPLOY_RESULT <json>`) the driver greps for; a
+`PIDEPLOY_READY` notify on `session_start` lets the driver confirm the session actually booted (an
+interactive `pi` launch silently died on stdin EOF — the failure this replaces).
 
 ---
 
-## 3. Doors
+## 3. The interface — natural-language conversation, no typed wire
 
-Mirrors the testers' two-door split. **Primary, build first:**
+There is no bespoke wire union: the caller's request is a **prompt**, and the manager's own LLM
+interprets it ("initial deploy", "redeploy after update", "set env X and redeploy") and drives the
+verbs. This is exactly the user's framing: *"ask the llm to do initial or after-update deployment."*
+The entry verb **`detect` takes the deploy's coordinates as params** — the LLM extracts them from the
+prompt, and `detect` binds them as the context every later verb reads (§7).
 
-- **`deploy({project_dir, subdomain, intent})`** — the messenger/NL door. The manager's own LLM
-  interprets `intent` ("initial deploy", "redeploy after update", "set env X and redeploy") and
-  drives the verbs. This is exactly the user's framing: *"ask the llm to do initial or after-update
-  deployment."*
+**Conversational, not one-shot.** When the manager is blocked or the request is ambiguous — no
+Dockerfile for a plain backend, a subdomain collision, a missing/empty `env_file`, unclear intent —
+it asks the caller in plain language and **ends its turn**. The caller replies with a follow-up
+prompt and the manager continues with full context; the deploy context persists across turns until
+the deploy concludes (§10).
 
-**Deferred** (like the testers deferred `run_test`):
+**Deferred** (like the testers deferred `run_test`): a **deterministic structured door** — a typed
+deploy spec the driver builds, no LLM interpretation — for CI/scripted use. Add once the NL flow is
+field-proven.
 
-- **Deterministic structured door** — a typed deploy spec (no LLM interpretation) for CI/scripted
-  use. Add once the NL door is field-proven.
+### 3.1 What the prompt conveys → `detect`'s params
 
-### 3.1 Payload (caller → manager)
+The LLM extracts these from the caller's request and passes them to `detect`, which binds the deploy:
 
 | Field         | Required | Notes                                                                 |
 |---------------|----------|-----------------------------------------------------------------------|
 | `project_dir` | yes      | **Absolute** path to the caller's repo. Manager operates in place — no clone. |
 | `subdomain`   | yes      | Caller-specified hostname label (locked decision). Manager validates against collisions. |
-| `intent`      | yes      | NL instruction.                                                       |
-| `env`         | no       | Extra env KEY=VALUE pairs to set on the app (inline, for programmatic callers). |
-| `env_file`    | no       | Path **relative to `project_dir`** of a gitignored runtime dotenv file. The manager reads it **in-sandbox** and bulk-sets the vars on Coolify — secrets never cross the wire or sit in argv. |
+| `env_file`    | no       | Path **relative to `project_dir`** of a gitignored runtime dotenv file. The manager reads it **in-sandbox** and bulk-sets the vars on Coolify — only the *path* rides the prompt, never the secret values. |
 
-### 3.2 Result (manager → caller) — clean, parseable
+`intent` is not a param — it is the prose of the prompt body the LLM reads (and idempotency is decided
+live against Coolify regardless, §4). Inline extra env vars are an `env`-verb param (§7), not part of
+the handoff.
 
-A deploy must end with a single structured result (the testers' `VERDICT:` parse is the #1 runtime
-risk; same care here):
+### 3.2 Result (manager → caller) — clean, code-derived
+
+A deploy ends with a single structured result, built **in code** from the verb ledger (never parsed
+from the LLM's prose — the testers' `VERDICT:` parse was the #1 runtime risk; this sidesteps it
+entirely) and emitted on a `notify` event as `PIDEPLOY_RESULT <json>` that the driver captures:
 
 ```json
 { "status": "ok|failed", "phase": "...", "url": "https://<subdomain>.<domain>",
@@ -225,7 +240,7 @@ Bash/Edit/Read alongside them (§5.0).
 
 | verb       | r/w  | does                                                                              |
 |------------|------|----------------------------------------------------------------------------------|
-| `detect`   | read | inspect `project_dir` → select profile (+ resolve its per-project port/volume/health) + backend addons |
+| `detect`   | read | **takes params `project_dir` / `subdomain` / `env_file`** (the LLM extracts them from the prompt) → **binds the deploy context**, then inspects `project_dir` → selects profile (+ resolves its per-project port/volume/health) + backend addons |
 | `scaffold` | write| write `deploy/Dockerfile` from the profile — **generated** (framework) or the project's **own** (`dockerfile` profile) — plus `deploy.sh`, `.env.deploy` |
 | `convex`   | write| `convex deploy` → capture prod URL (runs before frontend build)                  |
 | `provision`| write| create Coolify app, image=`ghcr.io/<org>/<repo>`, set resource limits (initial)  |
@@ -237,7 +252,10 @@ Bash/Edit/Read alongside them (§5.0).
 | `logs`     | read | tail Coolify app logs                                                             |
 
 `read ≠ write` (the testers' durable lesson): `status`/`logs`/`detect` are read-only and never
-mutate infra.
+mutate infra. Only `detect` takes the deploy's coordinates; every later verb reads its target from
+the **bound context** `detect` set (so they need no `project_dir`/`subdomain` of their own) — `env`
+optionally takes inline `vars`, `logs` an optional `lines` count. The verbs **mutate a ledger** the
+extension reads to build the result; they never return prose to parse.
 
 ---
 
@@ -261,37 +279,49 @@ are deterministic code (like the testers' identity/crash guards), fail closed:
 
 ## 9. Flows
 
-**Initial deploy** — `intent:"initial deploy"`, Coolify has no app for this project (live check):
-`detect → scaffold Dockerfile → [convex deploy → capture URL] → populate deploy/.env.deploy from
-central creds → provision Coolify app + limits → env (+ inject Convex URL) → [subdomain-collision
-guard] → dns + set Coolify domain → create GitHub repo if absent → deploy (build→GHCR→webhook) →
-[health guard] → return {url,…}`.
+**Initial deploy** — prompt says "initial deploy", Coolify has no app for this project (live check):
+`detect (binds context) → scaffold Dockerfile → [convex deploy → capture URL] → populate
+deploy/.env.deploy from central creds → provision Coolify app + limits → env (+ inject Convex URL) →
+[subdomain-collision guard] → dns + set Coolify domain → create GitHub repo if absent → deploy
+(build→GHCR→webhook) → [health guard] → conclude → emit result {url,…} on notify`.
 
-**Update deploy** — `intent:"redeploy after update"`, Coolify already has the app (live check):
+**Update deploy** — prompt says "redeploy after update", Coolify already has the app (live check):
 `detect (already set up) → [convex deploy if backend changed → re-inject URL] → redeploy (deploy.sh)
-→ [health guard] → return`.
+→ [health guard] → conclude → emit result`.
+
+The ship verbs (`deploy`/`redeploy`) are the only terminal points: a deploy **concludes** when one
+of them health-checks the app or the build fails — there is no other way to end a deploy.
 
 ---
 
 ## 10. Context-reset model
 
 The manager session is long-lived across a client session but **each deploy is an independent
-task** → per-deploy context isolation. Mirror the testers: **`compact()`** between deploys with
-strong "brand-new unrelated deploy, discard prior" instructions (the any-context reset primitive;
-`newSession` is gated to command contexts). A deploy is never reset mid-flow (would orphan an
-in-flight ship).
+task** → per-deploy context isolation. Within a deploy the context **persists across turns** so the
+caller can answer a blocking question and the manager resumes mid-flow (§3); the bound `currentDeploy`
+is held until the deploy concludes. Then, mirroring the testers, the `agent_end` hook **`compact()`s**
+with strong "brand-new unrelated deploy, discard prior" instructions (the any-context reset primitive;
+`newSession` is gated to command contexts) so the next, unrelated deploy in the same session starts
+clean. A deploy is never reset mid-flow (would orphan an in-flight ship) — `compact()` fires only
+*after* a ship concluded it.
 
 ---
 
 ## 11. Config (`config.json`, single source of truth)
 
-Manager-owned config; no hardcoded paths/creds:
+Manager-owned config; no hardcoded paths/creds (no transport keys — RPC is over stdio, so there is
+no port or token to configure):
 
-- `rpc.{port, token}` — localhost RPC door (port auto-fallback to next-free like the testers).
+- `stateDir` — where the manager writes its logs (`<stateDir>/logs/manager.log`).
 - `coolify.{base_url, api_token, server_uuid, dest_uuid}` — central Coolify creds.
 - `cloudflare.{api_token, zone_id, zone_name}` — central Cloudflare creds + the one domain.
 - `registry.{github_org, ghcr}` — GHCR/GitHub org for image push.
 - `convex.deploy_key` — Convex Cloud deploy key.
+- `model` / `thinking` — optional manager session model + reasoning tier (matches the pi-e2e-tester hub).
+
+The **client driver** (in the `deploy-via-manager` skill, not this repo) resolves *this* checkout's
+location from the `PI_DEPLOYMENT_MANAGER_DIR` env var or a skill-local config — never a hardcoded
+path — and spawns it as `pi --mode rpc`.
 
 Per-**project** deploy state stays in each project's **gitignored `deploy/.env.deploy`** (written by
 the manager: `COOLIFY_APP_UUID`, `COOLIFY_WEBHOOK_URL`, `DOMAIN`, `SUBDOMAIN`, …) — consumed only by
@@ -315,15 +345,17 @@ gitignored — same convention as pi-e2e-tester.
   generic **`dockerfile`** profile honors it (reads `EXPOSE`/`VOLUME`/`HEALTHCHECK`), so Bun/Go/Python/
   Rust/… all deploy language-blind. Per-language *generator* profiles (for repos with no Dockerfile)
   remain a future add.
-- **Runtime secrets** — RESOLVED: a gitignored `deploy/.env.runtime` (or any `--env-file` path),
-  read **in-sandbox** by the `env` verb and bulk-set on Coolify. Coolify is the live store; the file
-  is an optional declarative seed (omit on plain redeploys). `PUBLIC_BASE_URL` is **auto-derived** from
-  subdomain + zone, so the caller can't get the final URL wrong.
+- **Runtime secrets** — RESOLVED: a gitignored `deploy/.env.runtime` (or any `env_file` path named in
+  the prompt), read **in-sandbox** by the `env` verb and bulk-set on Coolify. Only the path rides the
+  prompt, never the values. Coolify is the live store; the file is an optional declarative seed (omit
+  on plain redeploys). `PUBLIC_BASE_URL` is **auto-derived** from subdomain + zone, so the caller can't
+  get the final URL wrong.
 - **Build host** — image build needs Docker + GHCR auth on whatever box runs the manager. Confirm
   the manager always runs where Docker is available (the user's single dev box for now).
 - **SQLite volume backups** — persistent volume gives durability across redeploys, not backups;
   decide a backup story later.
-- **Streaming progress** — whether the RPC streams phase updates to the caller or only returns the
-  final result.
+- **Surfacing progress** — the driver already sees the full RPC event stream (assistant turns +
+  `notify`s); whether to relay per-phase progress to the caller beyond the final `PIDEPLOY_RESULT`
+  notify is a driver-side choice, deferred.
 </content>
 </invoke>
