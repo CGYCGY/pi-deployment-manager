@@ -74,6 +74,18 @@ function repoSlug(projectDir: string): string {
   return basename(projectDir).toLowerCase();
 }
 
+/**
+ * Human-facing Coolify project (grouping) name derived from a repo slug. Acronym-aware: a
+ * short, separator-less all-letter slug (e.g. "ota", "api") reads as an acronym -> UPPERCASE;
+ * anything with word separators is Title Cased ("my-cool-app" -> "My Cool App").
+ */
+function projectDisplayName(slug: string): string {
+  const words = slug.split(/[-_\s]+/).filter(Boolean);
+  const sole = words.length === 1 ? words[0] : undefined;
+  if (sole && sole.length <= 4 && /^[a-z]+$/.test(sole)) return sole.toUpperCase();
+  return words.map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+}
+
 export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): void {
   const { roleLog, getCurrentDeploy, setCurrentDeploy, concludeDeploy, setActiveCtx } = deps;
 
@@ -110,10 +122,17 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
             "secrets. The env verb reads it in-sandbox; never paste secret values here.",
         }),
       ),
+      project_name: Type.Optional(
+        Type.String({
+          description:
+            "Optional Coolify project (grouping) name. Pass only if the caller explicitly named " +
+            "one; otherwise it is derived from the repo name (acronym-aware Title Case).",
+        }),
+      ),
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
       setActiveCtx(ctx);
-      const p = params as { project_dir: string; subdomain: string; env_file?: string };
+      const p = params as { project_dir: string; subdomain: string; env_file?: string; project_name?: string };
       if (!p.project_dir || !p.subdomain) {
         throw new Error("detect: project_dir and subdomain are required (extract them from the caller's request).");
       }
@@ -129,6 +148,7 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
         project_dir: projectDir,
         subdomain: p.subdomain,
         env_file: p.env_file,
+        project_name: p.project_name?.trim() || projectDisplayName(repoSlug(projectDir)),
         ledger: { phase: "received" },
         scratch: {},
       };
@@ -292,7 +312,9 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
       await assertSubdomainFree(d.subdomain, cf.zone_name);
 
       const repoName = repoSlug(d.project_dir);
-      const projectName = `pi-${reg.github_org}`.toLowerCase();
+      // Coolify project = one grouping per repo, named after it (acronym-aware Title Case),
+      // unless the caller named one explicitly at detect time.
+      const projectName = d.project_name ?? projectDisplayName(repoName);
       const projectUuid = await findOrCreateProject(projectName);
       const image = `${reg.ghcr}/${reg.github_org}/${repoName}`.toLowerCase();
 
