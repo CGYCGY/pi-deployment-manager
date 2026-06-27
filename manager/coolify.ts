@@ -129,7 +129,8 @@ export async function createApp(opts: CreateAppOpts): Promise<CreatedApp> {
 export async function setEnvs(appUuid: string, vars: Array<[string, string]>): Promise<void> {
   if (!vars.length) return;
   const data = vars.map(([key, value]) => ({ key, value, is_preview: false, is_build_time: false }));
-  await coolifyApi(`/applications/${appUuid}/envs/bulk`, { method: "POST", body: { data } });
+  // Coolify's bulk-envs route is PATCH; POST 404s on this path (verified against the live API).
+  await coolifyApi(`/applications/${appUuid}/envs/bulk`, { method: "PATCH", body: { data } });
 }
 
 export async function updateAppDomain(appUuid: string, fqdn: string): Promise<void> {
