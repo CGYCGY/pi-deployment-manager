@@ -11,6 +11,17 @@ import { dirname } from "node:path";
 import { getCloudflare, getCoolify, getRegistry } from "../shared/config.ts";
 import { assertReadable, assertWritable, safeDeployPath } from "../shared/sandbox.ts";
 
+/**
+ * Double-quote a value so deploy.sh can `source` it safely. deploy.sh does `set -a; source`,
+ * so an UNquoted value with a shell metachar breaks it — notably Coolify API tokens are
+ * `<id>|<hash>`, and the `|` is read as a pipe (the exit-127 "command not found" on the hash).
+ * Double quotes neutralise |, spaces, & etc.; we still backslash-escape \ " $ ` so a value
+ * can't expand a variable, run a command, or close the quote.
+ */
+function shDq(v: string): string {
+  return `"${v.replace(/[\\"$`]/g, (c) => `\\${c}`)}"`;
+}
+
 /** Project-specific values to fold into deploy/.env.deploy (creds come from central config). */
 export interface EnvDeployFields {
   repoName?: string;
@@ -67,31 +78,33 @@ export function writeEnvDeploy(projectDir: string, fields: EnvDeployFields = {})
   const subdomain = fields.subdomain ?? existing.SUBDOMAIN ?? "";
   const domain = fields.domain ?? existing.DOMAIN ?? "";
 
+  // Every value is shell-quoted: deploy.sh sources this file, so a bare metachar (e.g. the `|`
+  // in a Coolify `<id>|<hash>` token) would otherwise execute as a command.
   const lines = [
     "# Managed by pi-deployment-manager — central creds injected at deploy time.",
     "# Gitignored; never committed.",
     "",
     "# GitHub / registry",
-    `GITHUB_ORG=${reg.github_org}`,
-    `REPO_NAME=${repoName}`,
+    `GITHUB_ORG=${shDq(reg.github_org)}`,
+    `REPO_NAME=${shDq(repoName)}`,
     "",
     "# Coolify (central creds)",
-    `COOLIFY_BASE_URL=${coolify.base_url}`,
-    `COOLIFY_API_TOKEN=${coolify.api_token}`,
-    `COOLIFY_SERVER_UUID=${coolify.server_uuid}`,
-    `COOLIFY_DEST_UUID=${coolify.dest_uuid}`,
+    `COOLIFY_BASE_URL=${shDq(coolify.base_url)}`,
+    `COOLIFY_API_TOKEN=${shDq(coolify.api_token)}`,
+    `COOLIFY_SERVER_UUID=${shDq(coolify.server_uuid)}`,
+    `COOLIFY_DEST_UUID=${shDq(coolify.dest_uuid)}`,
     "",
     "# Coolify app (written by provision; preserved across rewrites)",
-    `COOLIFY_APP_UUID=${appUuid}`,
-    `COOLIFY_WEBHOOK_URL="${webhookUrl}"`,
+    `COOLIFY_APP_UUID=${shDq(appUuid)}`,
+    `COOLIFY_WEBHOOK_URL=${shDq(webhookUrl)}`,
     "",
     "# Domain",
-    `DOMAIN=${domain}`,
-    `SUBDOMAIN=${subdomain}`,
+    `DOMAIN=${shDq(domain)}`,
+    `SUBDOMAIN=${shDq(subdomain)}`,
     "",
     "# Cloudflare (central creds)",
-    `CLOUDFLARE_API_TOKEN=${cf.api_token}`,
-    `CLOUDFLARE_ZONE_ID=${cf.zone_id}`,
+    `CLOUDFLARE_API_TOKEN=${shDq(cf.api_token)}`,
+    `CLOUDFLARE_ZONE_ID=${shDq(cf.zone_id)}`,
     "",
   ];
 
