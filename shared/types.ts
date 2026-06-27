@@ -1,42 +1,22 @@
 /**
- * shared/types.ts — the manager's wire + state contracts.
+ * shared/types.ts — the manager's result + state contracts.
  *
- * Two halves:
- *   1. The RPC contract a project agent (client) sees: DeployRequest in,
- *      DeployResult out, carried by the DeployMessage / DeployResultMessage union.
- *   2. The in-process contract the verbs + door share: DeployLedger (the
- *      structured accumulator) and CurrentDeploy (the live deploy context).
+ * The manager is summoned over pi RPC mode and conversed with in natural language, so
+ * there is no bespoke wire union: the caller's request is a prompt, and the verbs take
+ * their target as params (detect binds project_dir/subdomain/env_file). What remains:
+ *   - DeployResult: the single structured result a deploy concludes with (built in code).
+ *   - DeployLedger + CurrentDeploy: the in-process contract the verbs share.
  *
- * Uses no pi runtime — importable from transport/config/sandbox via jiti.
+ * Uses no pi runtime — importable from config/sandbox/log via jiti.
  */
 
 /** The manager has a single session role (no spokes — a deploy runs to completion). */
 export type Role = "manager";
 
-// ── RPC contract (client ↔ manager) ────────────────────────────────────────
-
-/** What a project agent hands off. project_dir is ABSOLUTE — the manager operates in place. */
-export interface DeployRequest {
-  /** Absolute path to the caller's already-checked-out repo. */
-  project_dir: string;
-  /** Caller-specified subdomain label (validated against collisions, not invented). */
-  subdomain: string;
-  /** Natural-language instruction ("initial deploy", "redeploy after update", …). */
-  intent: string;
-  /** Optional extra env KEY=VALUE pairs to set on the app. */
-  env?: Record<string, string>;
-  /**
-   * Optional path (relative to project_dir) to a gitignored dotenv file of RUNTIME secrets.
-   * The manager reads it in-sandbox and bulk-sets the vars on Coolify — so secrets never
-   * cross the RPC wire or sit in argv. Absolute/escaping paths are refused by the sandbox.
-   */
-  env_file?: string;
-}
-
 /**
- * The single structured result a deploy ends with. BUILT FROM the ledger in code
- * — never parsed from the LLM's prose (the testers' VERDICT-parse is the #1 runtime
- * risk; here the source of truth is the ledger the verbs write).
+ * The single structured result a deploy concludes with. BUILT FROM the ledger in code
+ * — never parsed from the LLM's prose. Emitted to the client driver on the RESULT notify
+ * channel; the driver returns it verbatim to the calling project agent.
  */
 export interface DeployResult {
   status: "ok" | "failed";
@@ -51,15 +31,15 @@ export interface DeployResult {
   error?: string;
 }
 
-// ── In-process contract (door ↔ verbs) ──────────────────────────────────────
+// ── In-process contract (verbs ↔ extension) ──────────────────────────────────
 
 /**
- * The structured accumulator the verbs WRITE and the door READS to build the
- * DeployResult. The verbs mutate this (never return prose the door must parse);
- * `error` set by any verb forces status="failed", as does health "unhealthy".
+ * The structured accumulator the verbs WRITE and concludeDeploy READS to build the
+ * DeployResult. The verbs mutate this (never return prose to parse); `error` set by a
+ * ship verb forces status="failed", as does health "unhealthy".
  */
 export interface DeployLedger {
-  /** Advanced by each verb (e.g. "detected", "provisioned", "shipped"). */
+  /** Advanced by each verb (e.g. "detected", "provisioned", "deployed"). */
   phase: string;
   /** Frontend profile id chosen by detect. */
   profile?: string;
@@ -70,62 +50,26 @@ export interface DeployLedger {
   url?: string;
   health?: "healthy" | "unhealthy";
   logs_tail?: string;
-  /** First fatal error; presence forces a "failed" result. */
+  /** First fatal (terminal) error; presence forces a "failed" result. */
   error?: string;
 }
 
 /**
- * The live deploy context the door sets and the verbs read. One at a time
- * (a deploy is serialized); `getCurrentDeploy()` exposes it to the verb code.
+ * The live deploy context detect binds and the verbs read. One at a time (a deploy is
+ * serialized). It PERSISTS across turns so the caller can answer a question and the agent
+ * continues; it is reset only after the deploy concludes.
  */
 export interface CurrentDeploy {
   /** Validated absolute project dir (the sandbox root). */
   project_dir: string;
   subdomain: string;
-  intent: string;
-  env?: Record<string, string>;
   /** Sandbox-relative path to a gitignored runtime dotenv file (read by the env verb). */
   env_file?: string;
   ledger: DeployLedger;
   /**
-   * Transient inter-verb scratchpad (e.g. the captured Convex URL + the build-env var
-   * name it goes under, the resolved flow). NOT surfaced to the client — only the ledger
-   * is. Door inits it to {}.
+   * Transient inter-verb scratchpad (e.g. the captured Convex URL + the build-env var name
+   * it goes under, the resolved flow, the port/volume/health detect read from a Dockerfile).
+   * NOT surfaced to the client — only the ledger is. detect inits it to {}.
    */
   scratch: Record<string, string>;
 }
-
-// ── Transport union ──────────────────────────────────────────────────────────
-
-export interface TransportBase {
-  type: string;
-  ts: number;
-  requestId: string;
-}
-
-/** client → manager: please run this deploy. */
-export interface DeployMessage extends TransportBase {
-  type: "deploy";
-  from: "client";
-  project_dir: string;
-  subdomain: string;
-  intent: string;
-  env?: Record<string, string>;
-  env_file?: string;
-}
-
-/**
- * manager → client: the deploy is done, here is the structured result.
- *
- * v1 transport is synchronous request/response — this is returned as the HTTP 200
- * body of the client's POST /deploy (a deploy runs to completion and returns, per
- * DESIGN §2), so the client needs no server of its own. The type tag keeps the
- * body self-describing and leaves room for a future async-callback variant.
- */
-export interface DeployResultMessage extends TransportBase {
-  type: "deploy_result";
-  from: "manager";
-  result: DeployResult;
-}
-
-export type TransportMessage = DeployMessage | DeployResultMessage;

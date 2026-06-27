@@ -15,8 +15,6 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { Role } from "./types.ts";
-
 /** Directory containing this module (shared/), resolved at runtime. */
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -65,7 +63,6 @@ export interface Config {
   projectDir: string;
   /** State/logs dir (~ expanded). */
   stateDir: string;
-  rpc: { port: number; token: string };
   coolify: CoolifyConfig;
   cloudflare: CloudflareConfig;
   registry: RegistryConfig;
@@ -106,10 +103,6 @@ function parseConfig(raw: unknown): Config {
   const optStr = (o: Record<string, unknown>, key: string): string | undefined =>
     typeof o[key] === "string" && (o[key] as string).length > 0 ? (o[key] as string) : undefined;
 
-  const rpc = obj("rpc");
-  if (typeof rpc.port !== "number") {
-    throw new Error(`config.json: "rpc.port" must be a number`);
-  }
   const coolify = obj("coolify");
   const cloudflare = obj("cloudflare");
   const registry = obj("registry");
@@ -118,7 +111,6 @@ function parseConfig(raw: unknown): Config {
   return {
     projectDir: PROJECT_DIR,
     stateDir: expandTilde(String(r.stateDir ?? "~/.pi-deployment-manager")),
-    rpc: { port: rpc.port, token: reqStr(rpc, "rpc", "token") },
     coolify: {
       base_url: reqStr(coolify, "coolify", "base_url"),
       api_token: reqStr(coolify, "coolify", "api_token"),
@@ -171,28 +163,6 @@ export function getStateDir(): string {
   return loadConfig().stateDir;
 }
 
-/** The shared transport token. */
-export function getToken(): string {
-  return loadConfig().rpc.token;
-}
-
-/**
- * The RPC port for a role. The manager has a single role, so `role` is accepted
- * only to match transport.ts's getPort(role) signature; it always resolves the
- * one rpc.port.
- */
-export function getPort(_role?: Role): number {
-  return loadConfig().rpc.port;
-}
-
-/** Bind host (always 127.0.0.1 in v1 — localhost RPC only). */
-export function getHost(_role?: Role): string {
-  return "127.0.0.1";
-}
-
-export function getRpc(): Config["rpc"] {
-  return loadConfig().rpc;
-}
 export function getCoolify(): CoolifyConfig {
   return loadConfig().coolify;
 }

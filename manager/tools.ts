@@ -17,7 +17,7 @@ import { Type } from "typebox";
 
 import { ASSETS_DIR, getCloudflare, getConvex, getRegistry } from "../shared/config.ts";
 import type { Logger } from "../shared/log.ts";
-import { assertReadable, assertWritable, safeDeployPath } from "../shared/sandbox.ts";
+import { assertReadable, assertWritable, safeDeployPath, validateProjectDir } from "../shared/sandbox.ts";
 import type { CurrentDeploy } from "../shared/types.ts";
 
 import { createRecord } from "./cloudflare.ts";
@@ -38,8 +38,13 @@ import { runCommand } from "./subprocess.ts";
 
 export interface ManagerToolDeps {
   roleLog: Logger;
-  /** The live deploy context the door set; null between deploys. Verbs read it + write its ledger. */
+  /** The live deploy context; null until detect binds it. Verbs read it + write its ledger. */
   getCurrentDeploy: () => CurrentDeploy | null;
+  /** detect binds the deploy here from its params (project_dir/subdomain/env_file). */
+  setCurrentDeploy: (d: CurrentDeploy) => void;
+  /** The ship verbs call this once the app is health-checked (or the ship failed) to emit
+   * the code-derived DeployResult to the caller — the only terminal points of a deploy. */
+  concludeDeploy: (ctx: ExtensionContext) => void;
   setActiveCtx: (ctx: ExtensionContext) => void;
 }
 
@@ -70,11 +75,11 @@ function repoSlug(projectDir: string): string {
 }
 
 export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): void {
-  const { roleLog, getCurrentDeploy, setActiveCtx } = deps;
+  const { roleLog, getCurrentDeploy, setCurrentDeploy, concludeDeploy, setActiveCtx } = deps;
 
   const need = (verb: string): CurrentDeploy => {
     const d = getCurrentDeploy();
-    if (!d) throw new Error(`${verb}: no active deploy — the door binds the context per request.`);
+    if (!d) throw new Error(`${verb}: no active deploy — call detect first to bind project_dir + subdomain.`);
     return d;
   };
 
@@ -88,17 +93,47 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
     name: "detect",
     label: "Detect (read)",
     description:
-      "Inspect the target project (read-only) to select its DeployProfile " +
-      "(static-html | react-spa | astro-static | nextjs-node | nextjs-static | dockerfile) " +
-      "and any backend addons (convex-cloud | sqlite-volume). The generic `dockerfile` " +
-      "profile honors a project's own Dockerfile (any Bun/Go/Python/… server). Read-only — " +
-      "never mutates the repo or infra. START every deploy here.",
-    promptSnippet: "Inspect the project and pick its deploy profile + backend addons (read-only).",
-    promptGuidelines: ["Always call detect first — every later verb depends on the chosen profile."],
-    parameters: Type.Object({}),
-    async execute(_id, _params, _signal, _onUpdate, ctx) {
+      "START every deploy here. BINDS the deploy from the caller's request and inspects the " +
+      "target project (read-only) to select its DeployProfile (static-html | react-spa | " +
+      "astro-static | nextjs-node | nextjs-static | dockerfile) and any backend addons " +
+      "(convex-cloud | sqlite-volume). The generic `dockerfile` profile honors a project's " +
+      "own Dockerfile (any Bun/Go/Python/… server). Read-only — never mutates repo or infra.",
+    promptSnippet: "Bind the deploy and pick its profile + backend addons (read-only).",
+    promptGuidelines: ["Always call detect first — it binds the context every later verb reads."],
+    parameters: Type.Object({
+      project_dir: Type.String({ description: "Absolute path to the caller's checked-out repo to deploy." }),
+      subdomain: Type.String({ description: "Subdomain label the app is served at (https://<subdomain>.<zone>)." }),
+      env_file: Type.Optional(
+        Type.String({
+          description:
+            "Optional path, RELATIVE to project_dir, of a gitignored runtime dotenv file of " +
+            "secrets. The env verb reads it in-sandbox; never paste secret values here.",
+        }),
+      ),
+    }),
+    async execute(_id, params, _signal, _onUpdate, ctx) {
       setActiveCtx(ctx);
-      const d = need("detect");
+      const p = params as { project_dir: string; subdomain: string; env_file?: string };
+      if (!p.project_dir || !p.subdomain) {
+        throw new Error("detect: project_dir and subdomain are required (extract them from the caller's request).");
+      }
+      let projectDir: string;
+      try {
+        projectDir = validateProjectDir(p.project_dir);
+      } catch (err) {
+        throw new Error(`detect: invalid project_dir — ${(err as Error).message}`);
+      }
+      // Bind the deploy: detect is the entry point, so it creates the context every later
+      // verb reads. It persists across turns (caller back-and-forth) until the deploy concludes.
+      const d: CurrentDeploy = {
+        project_dir: projectDir,
+        subdomain: p.subdomain,
+        env_file: p.env_file,
+        ledger: { phase: "received" },
+        scratch: {},
+      };
+      setCurrentDeploy(d);
+
       const profile = await detectProfile(d.project_dir);
       const addons = await detectAddons(d.project_dir);
       d.ledger.profile = profile.id;
@@ -251,12 +286,10 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
       const reg = getRegistry();
       const cf = getCloudflare();
 
-      try {
-        await assertSubdomainFree(d.subdomain, cf.zone_name);
-      } catch (err) {
-        d.ledger.error = (err as Error).message;
-        throw err;
-      }
+      // Throws on collision — a RECOVERABLE block: the agent relays it to the caller and
+      // asks for a free subdomain. Do not write ledger.error here (it would wrongly poison a
+      // later successful ship in the same deploy); ledger.error is for terminal failures only.
+      await assertSubdomainFree(d.subdomain, cf.zone_name);
 
       const repoName = repoSlug(d.project_dir);
       const projectName = `pi-${reg.github_org}`.toLowerCase();
@@ -336,7 +369,6 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
         if (!existsSync(full)) throw new Error(`env: env_file "${d.env_file}" not found under project_dir.`);
         for (const [k, v] of Object.entries(parseDotenv(readFileSync(full, "utf8")))) merged.set(k, v);
       }
-      for (const [k, v] of Object.entries(d.env ?? {})) merged.set(k, v);
       for (const v of (params as { vars?: Array<{ key: string; value: string }> }).vars ?? []) {
         merged.set(v.key, v.value);
       }
@@ -373,12 +405,7 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
       const fqdn = `${d.subdomain}.${cf.zone_name}`;
       const url = `https://${fqdn}`;
 
-      try {
-        await assertSubdomainFree(d.subdomain, cf.zone_name, appUuid); // ours is allowed
-      } catch (err) {
-        d.ledger.error = (err as Error).message;
-        throw err;
-      }
+      await assertSubdomainFree(d.subdomain, cf.zone_name, appUuid); // ours is allowed; throws (recoverable) on a foreign collision
       assertTargetsOurApp(d.project_dir, appUuid);
 
       const ip = await getServerIp();
@@ -421,11 +448,16 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
         }
       }
 
+      // A ship is a TERMINAL point — whatever the outcome, conclude the deploy (emit the
+      // code-derived result to the caller) rather than throwing, so the caller always gets a
+      // structured DeployResult, not a recoverable error the agent might loop on.
       const ship = await runCommand("bash", ["deploy/deploy.sh"], { cwd: d.project_dir, timeoutMs: SHIP_TIMEOUT_MS });
       if (ship.code !== 0) {
         d.ledger.logs_tail = (ship.stderr.trim() || ship.stdout.trim()).slice(-2000);
+        d.ledger.error = `deploy.sh failed (exit ${ship.code ?? "killed"})`;
         d.ledger.phase = "ship-failed";
-        throw new Error(`deploy: deploy.sh failed (exit ${ship.code ?? "killed"}). See logs_tail.`);
+        concludeDeploy(ctx);
+        return ok(`Deploy FAILED: build/ship error. Reported to caller. See logs_tail.`, { failed: true });
       }
 
       const profile = d.ledger.profile ? getProfile(d.ledger.profile) : undefined;
@@ -440,6 +472,7 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
       await runCommand("git", ["add", "deploy", ".gitignore"], { cwd: d.project_dir }).catch(() => undefined);
 
       d.ledger.phase = health.healthy ? "deployed" : "unhealthy";
+      concludeDeploy(ctx);
       return ok(
         health.healthy
           ? `Deployed ${d.subdomain}: ${url} is healthy (${health.detail}). deploy/ files staged (not committed).`
@@ -468,8 +501,10 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
       const ship = await runCommand("bash", ["deploy/deploy.sh"], { cwd: d.project_dir, timeoutMs: SHIP_TIMEOUT_MS });
       if (ship.code !== 0) {
         d.ledger.logs_tail = (ship.stderr.trim() || ship.stdout.trim()).slice(-2000);
+        d.ledger.error = `deploy.sh failed (exit ${ship.code ?? "killed"})`;
         d.ledger.phase = "ship-failed";
-        throw new Error(`redeploy: deploy.sh failed (exit ${ship.code ?? "killed"}). See logs_tail.`);
+        concludeDeploy(ctx);
+        return ok(`Redeploy FAILED: build/ship error. Reported to caller. See logs_tail.`, { failed: true });
       }
 
       const env = readEnvDeploy(d.project_dir);
@@ -481,6 +516,7 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
       if (!health.healthy) d.ledger.logs_tail = await getAppLogs(appUuid).catch(() => "");
 
       d.ledger.phase = health.healthy ? "redeployed" : "unhealthy";
+      concludeDeploy(ctx);
       return ok(
         health.healthy ? `Redeployed ${url}; healthy (${health.detail}).` : `Redeployed but UNHEALTHY: ${health.detail}.`,
         { url, health: d.ledger.health, detail: health.detail },

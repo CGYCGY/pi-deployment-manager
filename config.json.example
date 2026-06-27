@@ -2,14 +2,7 @@
   "_about": "Single source of truth for pi-deployment-manager. Copy to config.json (gitignored) and fill in. This is the ONLY place deployment creds live — the manager writes them into each project's gitignored deploy/.env.deploy at deploy time and NEVER commits them, so your projects stop carrying secrets.",
 
   "stateDir": "~/.pi-deployment-manager",
-  "_stateDir_note": "Where the manager writes its logs (<stateDir>/logs/manager.log).",
-
-  "rpc": {
-    "port": 7200,
-    "_port_note": "Localhost RPC door. Auto-falls-back to the next free port if busy.",
-    "token": "CHANGE-ME-pideploy-shared-secret-7b3e1c"
-  },
-  "_rpc_token_note": "Shared bearer secret checked on every POST /deploy. Change before any non-local use.",
+  "_stateDir_note": "Where the manager writes its logs (<stateDir>/logs/manager.log). The client driver also keeps its session state here.",
 
   "coolify": {
     "_note": "The one Coolify VPS every project deploys to.",
