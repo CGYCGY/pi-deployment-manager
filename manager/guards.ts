@@ -79,20 +79,29 @@ export interface HealthResult {
  * probe the live URL for a serving response (2xx/3xx — a redirect still means it's up).
  * The crash-guard analog: a deploy that "succeeded" but serves a broken app is caught
  * here. Never throws on unhealthy (the caller records it + pulls logs); only reports.
+ *
+ * Phase A is a WAIT, not a gate. Coolify's status API can sit at "none" forever for an app
+ * whose deployment records it isn't returning — observed on every deploy of the pi-image
+ * gateway — and gating on it reported healthy, serving apps as failed 100% of the time.
+ * The probe is the ground truth, so only an explicit "failed" (a real signal, and one where
+ * probing would just hit the surviving OLD container) short-circuits it.
  */
 export async function assertHealthy(
   appUuid: string,
   url: string,
   healthPath: string,
 ): Promise<HealthResult> {
-  // Phase A — wait out the Coolify deployment queue (bounded).
+  // Phase A — wait out the Coolify deployment queue (bounded). Also stops the probe from
+  // racing the swap and passing against the old container.
   const statusDeadline = Date.now() + 5 * 60_000;
   let status = "none";
+  let statusNote = "";
   while (Date.now() < statusDeadline) {
     try {
       status = await getDeploymentStatus(appUuid);
     } catch (err) {
-      return { healthy: false, detail: `deploy-health guard: status query failed: ${(err as Error).message}` };
+      statusNote = ` (status query failed: ${(err as Error).message})`;
+      break;
     }
     if (status === "finished" || status === "failed") break;
     await sleep(5000);
@@ -100,8 +109,8 @@ export async function assertHealthy(
   if (status === "failed") {
     return { healthy: false, detail: "deploy-health guard: Coolify reported the deployment FAILED." };
   }
-  if (status !== "finished") {
-    return { healthy: false, detail: `deploy-health guard: deployment did not finish in time (last status "${status}").` };
+  if (status !== "finished" && !statusNote) {
+    statusNote = ` (Coolify never confirmed the deployment; last status "${status}")`;
   }
 
   // Phase B — probe the public URL. First deploy also waits on DNS propagation + the
@@ -113,7 +122,7 @@ export async function assertHealthy(
     try {
       const res = await fetch(target, { redirect: "manual" });
       if (res.status >= 200 && res.status < 400) {
-        return { healthy: true, detail: `deploy-health guard: ${target} -> HTTP ${res.status}.` };
+        return { healthy: true, detail: `deploy-health guard: ${target} -> HTTP ${res.status}.${statusNote}` };
       }
       last = `HTTP ${res.status}`;
     } catch (err) {
@@ -121,5 +130,5 @@ export async function assertHealthy(
     }
     await sleep(5000);
   }
-  return { healthy: false, detail: `deploy-health guard: ${target} never returned 2xx/3xx (last: ${last}).` };
+  return { healthy: false, detail: `deploy-health guard: ${target} never returned 2xx/3xx (last: ${last}).${statusNote}` };
 }
