@@ -142,8 +142,12 @@ export async function updateAppDomain(appUuid: string, fqdn: string): Promise<vo
 /** Latest deployment status: "queued" | "in_progress" | "finished" | "failed" | "none". */
 export async function getDeploymentStatus(appUuid: string): Promise<string> {
   const data = await coolifyApi(`/deployments/applications/${appUuid}?take=1`);
-  if (!Array.isArray(data) || data.length === 0) return "none";
-  const status = (data[0] as { status?: string }).status;
+  // Coolify 4.1.x wraps the list as {count, deployments:[...]}; older builds returned a bare array.
+  // Reading only the array shape made this report "none" forever, so assertHealthy's phase A burned
+  // its whole 5-minute bound on EVERY deploy before falling through to the probe.
+  const list = Array.isArray(data) ? data : ((data as { deployments?: unknown } | null)?.deployments ?? []);
+  if (!Array.isArray(list) || list.length === 0) return "none";
+  const status = (list[0] as { status?: string }).status;
   if (!status) throw new Error(`getDeploymentStatus: malformed deployment response for ${appUuid}.`);
   return status;
 }
