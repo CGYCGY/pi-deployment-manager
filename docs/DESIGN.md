@@ -228,6 +228,16 @@ line in the project's own Dockerfile is read by `inspect()` into the same `PERSI
 (`<subdomain>-data:/data`) the sqlite addon emits. So a BYOD app declares its volume in the one place
 it already does — no separate config, no addon needed.
 
+**Known gap — one volume only.** `ProfileInspection.volumeSpec` is a single string, so a Dockerfile
+declaring several paths (`VOLUME ["/root/.codex", "/root/.pi"]`) contributes at most one mount and the
+remainder must be created by hand. Nothing surfaces the shortfall: the app builds, deploys, and reports
+healthy, and the loss shows up only one redeploy later as whatever lived on the unmounted path — which
+reads as data corruption or an upstream bug rather than a missing mount. This cost pi-image-gateway
+three weeks of a re-login on every deploy. Fixing it means `volumeSpec: string[]` through `inspect()`
+and provision; `createApp` already loops over a comma-separated `persistentStorages`, so the API side
+is ready. A storage-management verb would also let the manager repair an existing app — today it can
+only report the gap and ask the caller to fix it in Coolify.
+
 **Convex = Convex Cloud** (locked) — managed, not self-hosted. The manager never deploys Convex onto
 the Coolify box; it only runs `convex deploy` and wires the resulting URL into the frontend env.
 

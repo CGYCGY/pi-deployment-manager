@@ -24,7 +24,12 @@ export interface DockerfileOutput {
 export interface ProfileInspection {
   /** EXPOSE port — overrides the profile's static `port` for provision. */
   port?: number;
-  /** Bare Coolify PERSISTENT_STORAGES spec ("name:/mount"); provision prefixes the subdomain. */
+  /**
+   * Bare Coolify PERSISTENT_STORAGES spec ("name:/mount"); provision prefixes the subdomain.
+   * SINGULAR: a Dockerfile declaring several paths (`VOLUME ["/root/.codex", "/root/.pi"]`) yields
+   * at most one mount here, and the rest must be added by hand — a silent gap, since the app
+   * deploys fine and only loses whatever lived on the unmounted paths, one redeploy later.
+   */
   volumeSpec?: string;
   /** Health-probe path (e.g. from a HEALTHCHECK) — overrides the profile's static `healthPath`. */
   healthPath?: string;
