@@ -211,7 +211,7 @@ The framework profiles **generate** a Dockerfile (their value: a build pipeline 
 ship); every generated one builds with `oven/bun` (`bun install --frozen-lockfile`). The generic
 **`dockerfile`** profile inverts this — it **honors the project's own Dockerfile** (`./Dockerfile`,
 else `./deploy/Dockerfile`) and reads what it declares: `EXPOSE` → the app port, `VOLUME` → a
-persistent volume, the `HEALTHCHECK` URL path → the health probe. So a plain backend in any language
+persistent volume per declared path, the `HEALTHCHECK` URL path → the health probe. So a plain backend in any language
 deploys with zero manager-side language knowledge. It is detected **last** (fallback), so a framework
 repo that happens to carry a Dockerfile still gets its build profile. Per-language *generator* profiles
 (`go-server`, `python-server`, for repos that ship no Dockerfile) are a future layer on this floor.
@@ -228,15 +228,23 @@ line in the project's own Dockerfile is read by `inspect()` into the same `PERSI
 (`<subdomain>-data:/data`) the sqlite addon emits. So a BYOD app declares its volume in the one place
 it already does — no separate config, no addon needed.
 
-**Known gap — one volume only.** `ProfileInspection.volumeSpec` is a single string, so a Dockerfile
-declaring several paths (`VOLUME ["/root/.codex", "/root/.pi"]`) contributes at most one mount and the
-remainder must be created by hand. Nothing surfaces the shortfall: the app builds, deploys, and reports
-healthy, and the loss shows up only one redeploy later as whatever lived on the unmounted path — which
-reads as data corruption or an upstream bug rather than a missing mount. This cost pi-image-gateway
-three weeks of a re-login on every deploy. Fixing it means `volumeSpec: string[]` through `inspect()`
-and provision; `createApp` already loops over a comma-separated `persistentStorages`, so the API side
-is ready. A storage-management verb would also let the manager repair an existing app — today it can
-only report the gap and ask the caller to fix it in Coolify.
+**Every declared path gets a mount.** `inspect()` returns `volumeSpecs: string[]` — one spec per path
+across every `VOLUME` line, in both JSON-array and shell form — and provision prefixes the subdomain to
+each before handing the comma-separated set to `createApp`. Mount names come from the last path segment
+(`/root/.pi` → `.pi`), falling back to the flattened path when two would collide (`/a/data` + `/b/data`
+→ `data`, `b-data`).
+
+This was singular until 2026-07-28, and the failure it caused is the reason the plural is tested:
+pi-image-gateway declares `VOLUME ["/root/.codex", "/root/.pi"]`, got one mount, and lost pi's auth on
+every redeploy for three weeks. Nothing surfaced it — the app built, deployed and reported healthy, and
+the damage appeared only on the *next* deploy as missing data on the unmounted path, which reads as
+corruption or an upstream bug rather than a provisioning gap. `manager/profiles/util.test.ts` pins the
+multi-path cases.
+
+**Repairing an existing app** is the `sync_storages` verb: it diffs the app's live mounts against what
+the Dockerfile declares and adds the missing ones (additive only — it never removes a mount or touches
+data). A mount added this way takes effect on the next deploy and **mounts empty**, so whatever lived on
+that path in the running container is not carried over — for an auth path that means one final re-seed.
 
 **Convex = Convex Cloud** (locked) — managed, not self-hosted. The manager never deploys Convex onto
 the Coolify box; it only runs `convex deploy` and wires the resulting URL into the frontend env.
@@ -258,6 +266,7 @@ Bash/Edit/Read alongside them (§5.0).
 | `dns`      | write| create/update the Cloudflare record for the **caller-specified** subdomain; set Coolify domain |
 | `deploy`   | write| build → push GHCR → trigger Coolify (runs `deploy/deploy.sh`)                     |
 | `redeploy` | write| API-only redeploy trigger (update path)                                          |
+| `sync_storages` | write| add any persistent volume the app is missing versus its Dockerfile (additive; effective next deploy, mounts empty) |
 | `status`   | read | Coolify deployment status                                                         |
 | `logs`     | read | tail Coolify app logs                                                             |
 

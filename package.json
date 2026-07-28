@@ -7,7 +7,7 @@
   "description": "Standalone agentic deployment service, built on pi. Project agents hand off a deploy via RPC; the manager owns deployment skills, creds, and infra-state and returns a structured result.",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "bun test shared/"
+    "test": "bun test"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.78.1",

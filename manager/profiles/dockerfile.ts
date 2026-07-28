@@ -37,11 +37,18 @@ export const dockerfileProfile: DeployProfile = {
     const out: ProfileInspection = {};
     if (m.expose) out.port = m.expose;
     if (m.healthPath) out.healthPath = m.healthPath;
-    if (m.volumeMount) {
-      // Bare spec "name:/mount"; provision prefixes the subdomain (volume names are global
-      // on the shared Coolify box). Name = last path segment ("/data" -> "data").
-      const name = m.volumeMount.split("/").filter(Boolean).pop() ?? "data";
-      out.volumeSpec = `${name}:${m.volumeMount}`;
+    if (m.volumeMounts?.length) {
+      // Bare specs "name:/mount"; provision prefixes the subdomain (volume names are global on
+      // the shared Coolify box). Name = last path segment ("/data" -> "data"), falling back to the
+      // flattened path when two mounts share one ("/a/data" + "/b/data" -> "a-data", "b-data").
+      const used = new Set<string>();
+      out.volumeSpecs = m.volumeMounts.map((mount) => {
+        const segments = mount.split("/").filter(Boolean);
+        let name = segments.pop() ?? "data";
+        if (used.has(name)) name = [...segments, name].join("-");
+        used.add(name);
+        return `${name}:${mount}`;
+      });
     }
     return out;
   },

@@ -133,6 +133,22 @@ export async function setEnvs(appUuid: string, vars: Array<[string, string]>): P
   await coolifyApi(`/applications/${appUuid}/envs/bulk`, { method: "PATCH", body: { data } });
 }
 
+/** Mount paths the app already has (Coolify wraps them as {persistent_storages:[...]}). */
+export async function listStorages(appUuid: string): Promise<string[]> {
+  const data = (await coolifyApi(`/applications/${appUuid}/storages`)) as {
+    persistent_storages?: Array<{ mount_path?: string }>;
+  } | null;
+  return (data?.persistent_storages ?? []).map((s) => s.mount_path ?? "").filter(Boolean);
+}
+
+/** Attach one persistent volume to an existing app. `type: "persistent"` is the enum Coolify wants. */
+export async function addStorage(appUuid: string, name: string, mountPath: string): Promise<void> {
+  await coolifyApi(`/applications/${appUuid}/storages`, {
+    method: "POST",
+    body: { type: "persistent", name, mount_path: mountPath },
+  });
+}
+
 export async function updateAppDomain(appUuid: string, fqdn: string): Promise<void> {
   await coolifyApi(`/applications/${appUuid}`, { method: "PATCH", body: { domains: fqdn } });
 }

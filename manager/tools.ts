@@ -22,12 +22,14 @@ import type { CurrentDeploy } from "../shared/types.ts";
 
 import { createRecord } from "./cloudflare.ts";
 import {
+  addStorage,
   createApp,
   findOrCreateProject,
   getAppLogs,
   getApplication,
   getDeploymentStatus,
   getServerIp,
+  listStorages,
   setEnvs,
   updateAppDomain,
 } from "./coolify.ts";
@@ -164,7 +166,8 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
       // provision/deploy — the profile singleton can't hold per-deploy state.
       const meta = profile.inspect ? await profile.inspect(d.project_dir) : {};
       if (meta.port) d.scratch.exposedPort = String(meta.port);
-      if (meta.volumeSpec) d.scratch.volumeSpec = meta.volumeSpec;
+      // scratch is string-valued; comma is the same separator createApp already splits on.
+      if (meta.volumeSpecs?.length) d.scratch.volumeSpecs = meta.volumeSpecs.join(",");
       if (meta.healthPath) d.scratch.healthPath = meta.healthPath;
       const port = meta.port ?? profile.port;
       const healthPath = meta.healthPath ?? profile.healthPath;
@@ -187,7 +190,7 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
         flow === "initial"
           ? "INITIAL flow: scaffold -> [convex if present] -> provision -> env -> dns -> deploy, then status."
           : "UPDATE flow: [convex if the backend changed] -> redeploy, then status.";
-      const volStr = d.scratch.volumeSpec ? `, volume ${d.scratch.volumeSpec}` : "";
+      const volStr = d.scratch.volumeSpecs ? `, volumes ${d.scratch.volumeSpecs}` : "";
       return ok(
         `Detected ${profile.id} (port ${port}, health ${healthPath}${volStr}); addons: ${addonStr}. ` +
           `Flow: ${flow.toUpperCase()}.${hint}\n${plan}`,
@@ -320,11 +323,18 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
 
       const addons = await detectAddons(d.project_dir);
       const sqlite = addons.find((a) => a.id === "sqlite-volume");
-      // A persistent volume comes from EITHER the project's Dockerfile VOLUME (the generic
-      // dockerfile profile, stashed in scratch by detect) OR the sqlite addon. Volume names
-      // are global on the shared Coolify box — prefix the subdomain to keep them distinct.
-      const bareVolume = d.scratch.volumeSpec ?? sqlite?.volumeSpec;
-      const persistentStorages = bareVolume ? `${d.subdomain}-${bareVolume}` : undefined;
+      // Persistent volumes come from EITHER the project's Dockerfile VOLUME lines (the generic
+      // dockerfile profile, stashed in scratch by detect) OR the sqlite addon. Volume names are
+      // global on the shared Coolify box — prefix the subdomain to keep them distinct. EVERY
+      // declared path gets a mount: dropping the tail of the list loses data one redeploy later.
+      const bareVolumes = d.scratch.volumeSpecs
+        ? d.scratch.volumeSpecs.split(",").filter(Boolean)
+        : sqlite?.volumeSpec
+          ? [sqlite.volumeSpec]
+          : [];
+      const persistentStorages = bareVolumes.length
+        ? bareVolumes.map((v) => `${d.subdomain}-${v}`).join(",")
+        : undefined;
       // Prefer the port detect resolved from the Dockerfile; fall back to the profile default.
       const exposedPort = d.scratch.exposedPort ? Number(d.scratch.exposedPort) : profile.port;
 
@@ -557,6 +567,45 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
         health.healthy ? `Redeployed ${url}; healthy (${health.detail}).` : `Redeployed but UNHEALTHY: ${health.detail}.`,
         { url, health: d.ledger.health, detail: health.detail },
       );
+    },
+  });
+
+  pi.registerTool({
+    name: "sync_storages",
+    label: "Sync persistent volumes (write)",
+    description:
+      "Reconcile an already-provisioned app's persistent volumes against what its Dockerfile " +
+      "declares: add any mount the app is missing. Use when a VOLUME path has no Coolify mount " +
+      "(data on it dies with the container). Additive only — never removes a mount, never " +
+      "touches the data. The new mount takes effect on the NEXT deploy, and mounts empty.",
+    promptSnippet: "Add any persistent volume the app is missing versus its Dockerfile.",
+    parameters: Type.Object({}),
+    async execute(_id, _params, _signal, _onUpdate, ctx) {
+      setActiveCtx(ctx);
+      const d = need("sync_storages");
+      const appUuid = appUuidFor(d);
+      if (!appUuid) throw new Error("sync_storages: project not set up (no COOLIFY_APP_UUID).");
+      assertTargetsOurApp(d.project_dir, appUuid);
+
+      const wanted = d.scratch.volumeSpecs ? d.scratch.volumeSpecs.split(",").filter(Boolean) : [];
+      if (!wanted.length) return ok("No VOLUME declared for this project; nothing to sync.", { added: [] });
+
+      const existing = new Set(await listStorages(appUuid));
+      const added: string[] = [];
+      for (const spec of wanted) {
+        const i = spec.indexOf(":");
+        const mount = spec.slice(i + 1);
+        if (i <= 0 || !mount || existing.has(mount)) continue;
+        await addStorage(appUuid, `${d.subdomain}-${spec.slice(0, i)}`, mount);
+        added.push(mount);
+      }
+      return added.length
+        ? ok(
+            `Added ${added.length} missing mount(s): ${added.join(", ")}. They take effect on the ` +
+              `NEXT deploy and mount EMPTY — anything currently on those paths is not carried over.`,
+            { added },
+          )
+        : ok(`All ${wanted.length} declared volume(s) already mounted.`, { added: [] });
     },
   });
 

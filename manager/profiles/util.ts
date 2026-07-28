@@ -116,8 +116,8 @@ export function readProjectDockerfile(projectDir: string): string | null {
 export interface DockerfileMeta {
   /** First EXPOSE port. */
   expose?: number;
-  /** First VOLUME mount path (e.g. "/data"). */
-  volumeMount?: string;
+  /** EVERY VOLUME mount path, in declaration order (e.g. ["/root/.codex", "/root/.pi"]). */
+  volumeMounts?: string[];
   /** URL path pulled from the HEALTHCHECK CMD (e.g. "/healthz"). */
   healthPath?: string;
 }
@@ -133,10 +133,14 @@ export function parseDockerfile(text: string): DockerfileMeta {
   const expose = text.match(/^\s*EXPOSE\s+(\d+)/im);
   if (expose?.[1]) meta.expose = Number(expose[1]);
 
-  // `VOLUME ["/data", ...]` (JSON array) or `VOLUME /data /other` (shell form) — take the first path.
-  const volume = text.match(/^\s*VOLUME\s+(.+)$/im);
-  const firstMount = volume?.[1]?.match(/\/[^\s"'[\],]+/);
-  if (firstMount) meta.volumeMount = firstMount[0];
+  // `VOLUME ["/data", ...]` (JSON array) or `VOLUME /data /other` (shell form), across any number
+  // of VOLUME lines. EVERY path counts: reading only the first silently dropped the rest, and the
+  // loss surfaced a redeploy later as missing data on the unmounted path, not as a setup error.
+  const mounts = new Set<string>();
+  for (const line of text.matchAll(/^\s*VOLUME\s+(.+)$/gim)) {
+    for (const path of (line[1] ?? "").matchAll(/\/[^\s"'[\],]+/g)) mounts.add(path[0]);
+  }
+  if (mounts.size) meta.volumeMounts = [...mounts];
 
   // HEALTHCHECK can wrap across lines with `\`; pull the first URL path out of its CMD.
   const health = text.match(/HEALTHCHECK[\s\S]*?CMD[\s\S]*?https?:\/\/[^/\s]+(\/[^\s"'|)\\]*)/i);
