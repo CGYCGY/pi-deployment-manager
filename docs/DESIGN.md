@@ -234,17 +234,12 @@ each before handing the comma-separated set to `createApp`. Mount names come fro
 (`/root/.pi` → `.pi`), falling back to the flattened path when two would collide (`/a/data` + `/b/data`
 → `data`, `b-data`).
 
-This was singular until 2026-07-28, and the failure it caused is the reason the plural is tested:
-pi-image-gateway declares `VOLUME ["/root/.codex", "/root/.pi"]`, got one mount, and lost pi's auth on
-every redeploy for three weeks. Nothing surfaced it — the app built, deployed and reported healthy, and
-the damage appeared only on the *next* deploy as missing data on the unmounted path, which reads as
-corruption or an upstream bug rather than a provisioning gap. `manager/profiles/util.test.ts` pins the
-multi-path cases.
+Singular until 2026-07-28; dropping the tail of the list is invisible until a redeploy, so
+`manager/profiles/util.test.ts` pins the multi-path cases against a "simplifying" edit.
 
-**Repairing an existing app** is the `sync_storages` verb: it diffs the app's live mounts against what
-the Dockerfile declares and adds the missing ones (additive only — it never removes a mount or touches
-data). A mount added this way takes effect on the next deploy and **mounts empty**, so whatever lived on
-that path in the running container is not carried over — for an auth path that means one final re-seed.
+**Repairing an existing app** is the `sync_storages` verb: add the mounts the app lacks versus its
+Dockerfile (additive only). A synced mount takes effect on the **next** deploy and **mounts empty** —
+whatever is on that path in the running container is not carried over.
 
 **Convex = Convex Cloud** (locked) — managed, not self-hosted. The manager never deploys Convex onto
 the Coolify box; it only runs `convex deploy` and wires the resulting URL into the frontend env.
@@ -352,29 +347,18 @@ gitignored — same convention as pi-e2e-tester.
 
 ---
 
-## 12. Open items to settle during build
+## 12. Open items
 
-- **Per-framework Dockerfiles** — RESOLVED: inline **bun-based** templates in each profile
-  (`react-spa`, `nextjs-node`, `nextjs-static`, `static-html`; `astro-static` reuses the astro-setup
-  asset). Validated against the user's real `deploy/Dockerfile` files.
+Settled items are not listed here — they live in the sections above. What is still open:
+
 - **Convex build-time inject** — written to the project's `.env.production` (read by the bun build).
-  A project whose `.dockerignore` excludes `.env*` would miss it — revisit a Docker `--build-arg`
-  path if that bites.
-- **Go (and other non-JS) servers** — RESOLVED for any project that ships its own Dockerfile: the
-  generic **`dockerfile`** profile honors it (reads `EXPOSE`/`VOLUME`/`HEALTHCHECK`), so Bun/Go/Python/
-  Rust/… all deploy language-blind. Per-language *generator* profiles (for repos with no Dockerfile)
-  remain a future add.
-- **Runtime secrets** — RESOLVED: a gitignored `deploy/.env.runtime` (or any `env_file` path named in
-  the prompt), read **in-sandbox** by the `env` verb and bulk-set on Coolify. Only the path rides the
-  prompt, never the values. Coolify is the live store; the file is an optional declarative seed (omit
-  on plain redeploys). `PUBLIC_BASE_URL` is **auto-derived** from subdomain + zone, so the caller can't
-  get the final URL wrong.
-- **Build host** — image build needs Docker + GHCR auth on whatever box runs the manager. Confirm
-  the manager always runs where Docker is available (the user's single dev box for now).
-- **SQLite volume backups** — persistent volume gives durability across redeploys, not backups;
-  decide a backup story later.
-- **Surfacing progress** — the driver already sees the full RPC event stream (assistant turns +
-  `notify`s); whether to relay per-phase progress to the caller beyond the final `PIDEPLOY_RESULT`
-  notify is a driver-side choice, deferred.
+  A project whose `.dockerignore` excludes `.env*` would miss it; revisit a `--build-arg` path if it bites.
+- **Per-language generator profiles** — a repo that ships **no** Dockerfile and isn't a known framework
+  has no profile. Only relevant for Go/Python/Rust repos that won't write one.
+- **Build host** — the image build needs Docker + GHCR auth on whatever box runs the manager.
+- **SQLite volume backups** — a volume gives durability across redeploys, not backups.
+- **Surfacing progress** — the caller sees nothing until the final `PIDEPLOY_RESULT` notify, so a
+  running deploy is indistinguishable from a hung one. The driver already receives the whole RPC event
+  stream, so relaying per-phase progress is a driver-side choice.
 </content>
 </invoke>

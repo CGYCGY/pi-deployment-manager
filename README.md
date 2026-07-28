@@ -58,14 +58,15 @@ target = drop one profile file.
 
 The framework profiles **generate** a Dockerfile. The generic **`dockerfile`** profile instead honors
 a project's **own** Dockerfile (`./Dockerfile`, else `./deploy/Dockerfile`) and reads what it declares
-— `EXPOSE` → port, `VOLUME` → one persistent volume per declared path, `HEALTHCHECK` URL → the health probe — so a plain
+— `EXPOSE` → port, `VOLUME` → one volume per declared path, `HEALTHCHECK` URL → the health probe — so a plain
 Bun/Go/Python/Rust/… backend deploys with zero manager-side language knowledge. It's detected last, so
 a framework repo carrying a Dockerfile still gets its build profile.
 
 Addons: `convex-cloud` (deploy Convex Cloud backend-first, inject its prod URL as a build-time env)
 and `sqlite-volume` (mount a persistent Coolify volume for the db file). A `dockerfile`-profile app
 gets its volumes straight from the Dockerfile's `VOLUME` lines — every declared path, no addon needed.
-If an app was provisioned before a path was declared, `sync_storages` adds the missing mounts.
+`sync_storages` adds mounts to an app provisioned before a path was declared (effective next deploy,
+mounts empty).
 
 ## Guards (fail-closed, in code)
 
