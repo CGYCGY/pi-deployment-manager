@@ -101,6 +101,8 @@ The LLM extracts these from the caller's request and passes them to `detect`, wh
 | `project_dir` | yes      | **Absolute** path to the caller's repo. Manager operates in place — no clone. |
 | `subdomain`   | yes      | Caller-specified hostname label (locked decision). Manager validates against collisions. |
 | `env_file`    | no       | Path **relative to `project_dir`** of a gitignored runtime dotenv file. The manager reads it **in-sandbox** and bulk-sets the vars on Coolify — only the *path* rides the prompt, never the secret values. |
+| `repo`        | no       | `owner/name`. Used **only** when the project has no usable github.com origin remote (detect refused and the caller answered). An origin remote always wins, silently. |
+| `confirm_namespace_migration` | no | Boolean; acknowledges the namespace-migration block (§8.3). |
 
 `intent` is not a param — it is the prose of the prompt body the LLM reads (and idempotency is decided
 live against Coolify regardless, §4). Inline extra env vars are an `env`-verb param (§7), not part of
@@ -128,6 +130,12 @@ checked out; just pass the path). No clone.
 - **Initial deploy** needs repo write: scaffold `deploy/Dockerfile`, **stage** the deploy/ files
   (`git add`; the caller owns the commit), create the GitHub repo if absent, provision Coolify,
   allocate DNS, first ship.
+- **Image namespace = the origin remote.** `detect` runs `git remote get-url origin` and parses
+  `owner/repo` (SSH + HTTPS forms, both lowercased for GHCR). That pair drives the image name, the
+  `gh repo view/create` slug, and `GITHUB_ORG`/`REPO_NAME` in `deploy/.env.deploy`. There is **no**
+  central org and **no** fallback to `basename(project_dir)` — a renamed local dir must not move the
+  image, and a wrong org creates stray empty repos + misplaced packages (the failure this replaces).
+  No usable remote ⇒ recoverable refusal (§8.3).
 - **Update deploy** is **API-only**: the deploy is image-based — `deploy/deploy.sh` builds the image,
   pushes to **GHCR**, and triggers the Coolify webhook. Redeploy just re-runs that path.
 
@@ -168,7 +176,7 @@ depends on **no external `skills_dir`** — clone, `npm install`, run.
 
 | capability | scope |
 |------------|-------|
-| **read**   | the target `project_dir`, **read-only** — `detect` must inspect `package.json` / `next.config` / `astro.config` / `convex/` / `index.html` to pick the profile. |
+| **read**   | the target `project_dir`, **read-only** — `detect` must inspect `package.json` / `next.config` / `astro.config` / `convex/` / `index.html` to pick the profile, and runs `git remote get-url origin` to resolve the image namespace. |
 | **write**  | a fixed **allowlist**: `<project_dir>/deploy/*`, plus two project-root writes (`.gitignore` entries, `.env.production`), and `git add/commit` of those. **Nothing else.** |
 | **network**| Coolify · Cloudflare · GHCR · Convex Cloud · GitHub (`gh`) APIs only. |
 | **denied** | general Bash, Edit, Read, Glob, Write outside the allowlist. |
@@ -253,10 +261,10 @@ Bash/Edit/Read alongside them (§5.0).
 
 | verb       | r/w  | does                                                                              |
 |------------|------|----------------------------------------------------------------------------------|
-| `detect`   | read | **takes params `project_dir` / `subdomain` / `env_file`** (the LLM extracts them from the prompt) → **binds the deploy context**, then inspects `project_dir` → selects profile (+ resolves its per-project port/volume/health) + backend addons |
+| `detect`   | read | **takes params `project_dir` / `subdomain` / `env_file`** (the LLM extracts them from the prompt) → resolves `owner/repo` from the origin remote → **binds the deploy context**, then inspects `project_dir` → selects profile (+ resolves its per-project port/volume/health) + backend addons |
 | `scaffold` | write| write `deploy/Dockerfile` from the profile — **generated** (framework) or the project's **own** (`dockerfile` profile) — plus `deploy.sh`, `.env.deploy` |
 | `convex`   | write| `convex deploy` → capture prod URL (runs before frontend build)                  |
-| `provision`| write| create Coolify app, image=`ghcr.io/<org>/<repo>`, set resource limits (initial)  |
+| `provision`| write| create Coolify app, image=`ghcr.io/<owner>/<repo>`, set resource limits (initial); app already exists ⇒ **repair**: PATCH its `docker_registry_image_name` to that image instead of creating a duplicate |
 | `env`      | write| set app env vars: auto `PUBLIC_BASE_URL` + caller's `env_file` runtime secrets (read in-sandbox) + injected Convex URL |
 | `dns`      | write| create/update the Cloudflare record for the **caller-specified** subdomain; set Coolify domain |
 | `deploy`   | write| build → push GHCR → trigger Coolify (runs `deploy/deploy.sh`)                     |
@@ -284,7 +292,11 @@ are deterministic code (like the testers' identity/crash guards), fail closed:
 2. **Wrong-target guard** — every mutating Coolify/DNS call must target the app/record bound to
    *this* `project_dir`+subdomain (tracked via `deploy/.env.deploy`'s `COOLIFY_APP_UUID`/`DOMAIN`).
    Never modify another project's app on the shared server.
-3. **Deploy-health guard** — after `deploy`/`redeploy`, poll Coolify deployment status + the
+3. **Namespace guards (in `detect`)** — no github.com origin remote ⇒ refuse (there is no
+   fallback); recorded `GITHUB_ORG` ≠ the remote's owner ⇒ refuse as a **namespace migration**.
+   Both are **recoverable blocks**, not `ledger.error`: the LLM relays them as a question and the
+   caller answers via detect's `repo` / `confirm_namespace_migration` params.
+4. **Deploy-health guard** — after `deploy`/`redeploy`, poll Coolify deployment status + the
    `/healthz` endpoint; auto-**fail** the result if unhealthy (the profile Dockerfiles already add `HEALTHCHECK`
    + `/healthz`). This is the deployment analog of the crash-guard — catches a deploy that "succeeds"
    but serves a broken app.
@@ -302,6 +314,12 @@ deploy/.env.deploy from central creds → provision Coolify app + limits → env
 **Update deploy** — prompt says "redeploy after update", Coolify already has the app (live check):
 `detect (already set up) → [convex deploy if backend changed → re-inject URL] → redeploy (deploy.sh)
 → [health guard] → conclude → emit result`.
+
+**Namespace migration** — the app was provisioned under a different owner than the origin remote:
+`detect (blocks) → caller confirms → detect (confirm_namespace_migration) → provision (repairs: app
+re-pointed at the new image) → deploy (builds/pushes under the new owner) → [health guard] →
+conclude`. `redeploy` alone is WRONG here — it would push the new image while Coolify still pulls the
+old one. The old GHCR package is left untouched.
 
 The ship verbs (`deploy`/`redeploy`) are the only terminal points: a deploy **concludes** when one
 of them health-checks the app or the build fails — there is no other way to end a deploy.
@@ -329,7 +347,8 @@ no port or token to configure):
 - `stateDir` — where the manager writes its logs (`<stateDir>/logs/manager.log`).
 - `coolify.{base_url, api_token, server_uuid, dest_uuid}` — central Coolify creds.
 - `cloudflare.{api_token, zone_id, zone_name}` — central Cloudflare creds + the one domain.
-- `registry.{github_org, ghcr}` — GHCR/GitHub org for image push.
+- `registry.{ghcr}` — registry host only. The `<owner>/<repo>` half is per-project, from the
+  project's origin remote (§4) — there is deliberately no central org key.
 - `convex.deploy_key` — Convex Cloud deploy key.
 - `model` / `thinking` — optional manager session model + reasoning tier (matches the pi-e2e-tester hub).
 
@@ -338,7 +357,8 @@ location from the `PI_DEPLOYMENT_MANAGER_DIR` env var or a skill-local config �
 path — and spawns it as `pi --mode rpc`.
 
 Per-**project** deploy state stays in each project's **gitignored `deploy/.env.deploy`** (written by
-the manager: `COOLIFY_APP_UUID`, `COOLIFY_WEBHOOK_URL`, `DOMAIN`, `SUBDOMAIN`, …) — consumed only by
+the manager: `COOLIFY_APP_UUID`, `COOLIFY_WEBHOOK_URL`, `DOMAIN`, `SUBDOMAIN`, `GITHUB_ORG`,
+`REPO_NAME` — the last two from the origin remote, and preserved across rewrites) — consumed only by
 the bundled `deploy.sh`; the manager populates the cred fields from central config at deploy time and
 never commits them.
 

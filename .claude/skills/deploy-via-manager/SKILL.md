@@ -28,6 +28,7 @@ MANAGER_LOCATION: the driver resolves the manager checkout from the `PI_DEPLOYME
 - `intent` is only a hint; the manager decides initial-vs-update live against Coolify. When unsure, say "redeploy after update" — it is always safe.
 
 ### Preparing the project (confirm, don't build it yourself)
+- The project MUST have a GitHub origin remote — the manager derives owner/repo (and the GHCR image namespace) from it, with no fallback. No remote ⇒ the manager asks: add one, or state the intended `owner/repo` in your answer. If the recorded namespace differs from the remote's owner, it asks you to confirm the migration before re-pointing the app.
 - A plain backend (Bun/Go/Python/Rust/…) needs a working Dockerfile at the repo root or `deploy/Dockerfile` — the manager uses it verbatim and reads the port from `EXPOSE`, a volume from `VOLUME`, the probe from `HEALTHCHECK`. Frontend apps (React/Astro/Next/static) need none. If a backend ships none, add one (or say so) before deploying.
 - Runtime secrets go in a gitignored dotenv file (e.g. `deploy/.env.runtime`, `KEY=VALUE` per line). Name its path in the request; never commit it, never paste secret values into the request or this chat.
 
@@ -73,7 +74,7 @@ MANAGER_LOCATION: the driver resolves the manager checkout from the `PI_DEPLOYME
 ### Manager asks a question
 - **IF:** a tool prints `kind:"reply"`
 - **THEN:** read its `text`; answer from what you know or ask the user, then run the `send` tool with the answer. Repeat until `kind:"result"`.
-- **EXAMPLES:** "no Dockerfile found — is this a backend?", "subdomain taken, pick another", "which runtime env file?"
+- **EXAMPLES:** "no Dockerfile found — is this a backend?", "subdomain taken, pick another", "which runtime env file?", "no GitHub origin remote — state owner/repo", "recorded GITHUB_ORG differs from the remote — confirm the namespace migration?"
 
 ### Deploy concluded
 - **IF:** a tool prints `kind:"result"`

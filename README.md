@@ -34,6 +34,12 @@ is fully standalone — clone, `npm install`, run; nothing outside the repo.
 optional `env_file` from the caller's request and passes them to `detect`, which **binds the deploy
 context** every later verb reads (the context persists across turns until the deploy concludes).
 
+The GHCR image namespace comes from the project's **git origin remote** (`<ghcr>/<owner>/<repo>`) —
+no central org, no fallback to the directory name. A project with no GitHub origin remote is refused
+(the caller may state `owner/repo` instead), and an app recorded under a different owner is refused
+as a **namespace migration** until the caller confirms; `provision` then re-points the existing app
+at the new image.
+
 - **Initial deploy:** `detect → scaffold → [convex] → provision → env → dns → deploy`
 - **Update deploy:** `detect → [convex if backend changed] → redeploy`
 
