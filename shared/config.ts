@@ -55,9 +55,11 @@ export interface CloudflareConfig {
   dns_target: string;
 }
 
-/** GHCR/GitHub org images are pushed under. */
+/**
+ * Registry host only. The owner/repo half of the image name is per-project — detect
+ * resolves it from the project's git origin remote, never from central config.
+ */
 export interface RegistryConfig {
-  github_org: string;
   /** Registry host; "ghcr.io" in v1. */
   ghcr: string;
 }
@@ -133,7 +135,6 @@ function parseConfig(raw: unknown): Config {
       dns_target: optStr(cloudflare, "dns_target") ?? "@",
     },
     registry: {
-      github_org: reqStr(registry, "registry", "github_org"),
       ghcr: typeof registry.ghcr === "string" && registry.ghcr.length > 0 ? registry.ghcr : "ghcr.io",
     },
     convex: { deploy_key: reqStr(convex, "convex", "deploy_key") },

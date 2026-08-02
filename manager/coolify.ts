@@ -149,6 +149,18 @@ export async function addStorage(appUuid: string, name: string, mountPath: strin
   });
 }
 
+/**
+ * Re-point an existing app at another registry image. Needed for a namespace migration:
+ * the app keeps its uuid/domain/env/volumes and only the pull source moves, so the next
+ * deploy ships the image pushed under the remote-derived owner.
+ */
+export async function updateAppImage(appUuid: string, image: string, tag = "latest"): Promise<void> {
+  await coolifyApi(`/applications/${appUuid}`, {
+    method: "PATCH",
+    body: { docker_registry_image_name: image, docker_registry_image_tag: tag },
+  });
+}
+
 export async function updateAppDomain(appUuid: string, fqdn: string): Promise<void> {
   await coolifyApi(`/applications/${appUuid}`, { method: "PATCH", body: { domains: fqdn } });
 }

@@ -8,7 +8,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
-import { getCloudflare, getCoolify, getRegistry } from "../shared/config.ts";
+import { getCloudflare, getCoolify } from "../shared/config.ts";
 import { assertReadable, assertWritable, safeDeployPath } from "../shared/sandbox.ts";
 
 /**
@@ -24,6 +24,8 @@ function shDq(v: string): string {
 
 /** Project-specific values to fold into deploy/.env.deploy (creds come from central config). */
 export interface EnvDeployFields {
+  /** GitHub owner half of the image namespace — per-project, from the origin remote. */
+  owner?: string;
   repoName?: string;
   subdomain?: string;
   domain?: string;
@@ -62,18 +64,19 @@ export function readEnvDeploy(projectDir: string): Record<string, string> {
 
 /**
  * (Re)write deploy/.env.deploy from central config + the passed project fields,
- * PRESERVING any COOLIFY_APP_UUID / COOLIFY_WEBHOOK_URL already on disk (provision writes
- * them; later rewrites for DOMAIN/SUBDOMAIN must not clobber them or the app is orphaned).
+ * PRESERVING any COOLIFY_APP_UUID / COOLIFY_WEBHOOK_URL / GITHUB_ORG / REPO_NAME already on
+ * disk (provision writes them; later rewrites for DOMAIN/SUBDOMAIN must not clobber them or
+ * the app is orphaned / the image name silently changes).
  * Returns the absolute path. The file is gitignored; never committed.
  */
 export function writeEnvDeploy(projectDir: string, fields: EnvDeployFields = {}): string {
   const existing = readEnvDeploy(projectDir);
   const coolify = getCoolify();
   const cf = getCloudflare();
-  const reg = getRegistry();
 
   const appUuid = fields.appUuid ?? existing.COOLIFY_APP_UUID ?? "";
   const webhookUrl = fields.webhookUrl ?? existing.COOLIFY_WEBHOOK_URL ?? "";
+  const owner = fields.owner ?? existing.GITHUB_ORG ?? "";
   const repoName = fields.repoName ?? existing.REPO_NAME ?? "";
   const subdomain = fields.subdomain ?? existing.SUBDOMAIN ?? "";
   const domain = fields.domain ?? existing.DOMAIN ?? "";
@@ -85,7 +88,7 @@ export function writeEnvDeploy(projectDir: string, fields: EnvDeployFields = {})
     "# Gitignored; never committed.",
     "",
     "# GitHub / registry",
-    `GITHUB_ORG=${shDq(reg.github_org)}`,
+    `GITHUB_ORG=${shDq(owner)}`,
     `REPO_NAME=${shDq(repoName)}`,
     "",
     "# Coolify (central creds)",

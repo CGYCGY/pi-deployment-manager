@@ -65,6 +65,13 @@ export interface CurrentDeploy {
   subdomain: string;
   /** Sandbox-relative path to a gitignored runtime dotenv file (read by the env verb). */
   env_file?: string;
+  /**
+   * GitHub owner + repo the image namespace is built from (`<ghcr>/<owner>/<repo_name>`),
+   * resolved by detect from the project's origin remote — ground truth, so a renamed local
+   * dir can never move the image. Both lowercased (GHCR rejects uppercase).
+   */
+  owner: string;
+  repo_name: string;
   /** Coolify project (grouping) name. Caller-supplied; else derived from the repo name. */
   project_name?: string;
   ledger: DeployLedger;

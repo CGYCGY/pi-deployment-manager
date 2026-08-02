@@ -10,7 +10,7 @@
 // ledger (the door builds the client result from it); they never return prose to parse.
 
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -32,6 +32,7 @@ import {
   listStorages,
   setEnvs,
   updateAppDomain,
+  updateAppImage,
 } from "./coolify.ts";
 import { ensureGitignored, parseDotenv, readEnvDeploy, writeEnvDeploy } from "./envdeploy.ts";
 import { assertHealthy, assertSubdomainFree, assertTargetsOurApp } from "./guards.ts";
@@ -71,9 +72,34 @@ function ok(text: string, details?: Record<string, unknown>) {
   return { content: [{ type: "text" as const, text }], details };
 }
 
-/** Lowercase repo slug (GHCR + git remotes are lowercase; Coolify app name uses the subdomain). */
-function repoSlug(projectDir: string): string {
-  return basename(projectDir).toLowerCase();
+export interface RepoRef {
+  owner: string;
+  repo: string;
+}
+
+/**
+ * Parse `owner/repo` out of a github.com remote URL — SSH scp-form, ssh://, and https://
+ * (with or without `.git`, with or without a userinfo prefix). Both parts are LOWERCASED:
+ * GHCR rejects uppercase in an image name, while a git remote may carry any case
+ * (github.com/CGYCGY/…). Returns null for a non-github.com or unparsable remote.
+ */
+export function parseGithubRemote(raw: string): RepoRef | null {
+  const m = raw.trim().match(/^(?:git@|ssh:\/\/(?:[^@/]+@)?|https?:\/\/(?:[^@/]+@)?)github\.com[:/](.+)$/i);
+  return m ? ownerRepoOf(m[1] ?? "") : null;
+}
+
+/** Parse an `owner/name` string the caller stated (detect's `repo` param). */
+function parseRepoParam(raw: string): RepoRef | null {
+  return ownerRepoOf(raw.trim().replace(/^https?:\/\/github\.com\//i, ""));
+}
+
+function ownerRepoOf(path: string): RepoRef | null {
+  const [owner, repo] = path
+    .replace(/\.git$/i, "")
+    .split("/")
+    .filter(Boolean);
+  if (!owner || !repo) return null;
+  return { owner: owner.toLowerCase(), repo: repo.toLowerCase() };
 }
 
 /**
@@ -111,7 +137,8 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
       "target project (read-only) to select its DeployProfile (static-html | react-spa | " +
       "astro-static | nextjs-node | nextjs-static | dockerfile) and any backend addons " +
       "(convex-cloud | sqlite-volume). The generic `dockerfile` profile honors a project's " +
-      "own Dockerfile (any Bun/Go/Python/… server). Read-only — never mutates repo or infra.",
+      "own Dockerfile (any Bun/Go/Python/… server). Also resolves the GHCR image namespace " +
+      "from the project's git origin remote. Read-only — never mutates repo or infra.",
     promptSnippet: "Bind the deploy and pick its profile + backend addons (read-only).",
     promptGuidelines: ["Always call detect first — it binds the context every later verb reads."],
     parameters: Type.Object({
@@ -131,10 +158,31 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
             "one; otherwise it is derived from the repo name (acronym-aware Title Case).",
         }),
       ),
+      repo: Type.Optional(
+        Type.String({
+          description:
+            "GitHub `owner/name` for the image namespace. Pass ONLY after detect refused for a " +
+            "missing origin remote and the caller stated it; an existing origin remote always wins.",
+        }),
+      ),
+      confirm_namespace_migration: Type.Optional(
+        Type.Boolean({
+          description:
+            "Set true ONLY after the caller confirmed the namespace migration detect refused on " +
+            "(the recorded GITHUB_ORG differs from the remote's owner).",
+        }),
+      ),
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
       setActiveCtx(ctx);
-      const p = params as { project_dir: string; subdomain: string; env_file?: string; project_name?: string };
+      const p = params as {
+        project_dir: string;
+        subdomain: string;
+        env_file?: string;
+        project_name?: string;
+        repo?: string;
+        confirm_namespace_migration?: boolean;
+      };
       if (!p.project_dir || !p.subdomain) {
         throw new Error("detect: project_dir and subdomain are required (extract them from the caller's request).");
       }
@@ -144,13 +192,48 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
       } catch (err) {
         throw new Error(`detect: invalid project_dir — ${(err as Error).message}`);
       }
+
+      // The origin remote is GROUND TRUTH for the image namespace: it always wins over a
+      // caller-stated repo, and there is no config/basename fallback — deriving the name from
+      // the local dir put images and empty repos under the wrong owner.
+      const remote = await runCommand("git", ["remote", "get-url", "origin"], { cwd: projectDir, timeoutMs: 30_000 });
+      const stated = p.repo ? parseRepoParam(p.repo) : null;
+      const ref = (remote.code === 0 ? parseGithubRemote(remote.stdout) : null) ?? stated;
+      // RECOVERABLE block (same contract as assertSubdomainFree): throw, the agent relays it to
+      // the caller as a question. NOT a ledger.error — nothing has failed yet.
+      if (!ref) {
+        throw new Error(
+          `detect: ${projectDir} has no usable GitHub origin remote` +
+            `${remote.code === 0 && remote.stdout.trim() ? ` (origin is "${remote.stdout.trim()}", not a github.com URL)` : ""}` +
+            `, so the GHCR image namespace cannot be resolved. There is NO fallback. Ask the caller to either ` +
+            `set an origin remote (git remote add origin git@github.com:<owner>/<repo>.git) and retry, or state ` +
+            `the intended owner/repo — then call detect again with repo:"<owner>/<name>".`,
+        );
+      }
+
+      // Namespace migration: the project is already deployed under a different owner. Re-pointing
+      // it moves the image source, so it needs the caller's word, not ours.
+      const recordedOrg = readEnvDeploy(projectDir).GITHUB_ORG;
+      const migrating = !!recordedOrg && recordedOrg.toLowerCase() !== ref.owner;
+      if (migrating && !p.confirm_namespace_migration) {
+        throw new Error(
+          `detect: namespace migration — deploy/.env.deploy records GITHUB_ORG="${recordedOrg}" but the origin ` +
+            `remote resolves to "${ref.owner}". This project is deployed under the OLD namespace; migrating ` +
+            `re-points the Coolify app at ${getRegistry().ghcr}/${ref.owner}/${ref.repo} and pushes there ` +
+            `(the old package stays behind, untouched). Ask the caller to confirm, then call detect again with ` +
+            `confirm_namespace_migration:true.`,
+        );
+      }
+
       // Bind the deploy: detect is the entry point, so it creates the context every later
       // verb reads. It persists across turns (caller back-and-forth) until the deploy concludes.
       const d: CurrentDeploy = {
         project_dir: projectDir,
         subdomain: p.subdomain,
         env_file: p.env_file,
-        project_name: p.project_name?.trim() || projectDisplayName(repoSlug(projectDir)),
+        owner: ref.owner,
+        repo_name: ref.repo,
+        project_name: p.project_name?.trim() || projectDisplayName(ref.repo),
         ledger: { phase: "received" },
         scratch: {},
       };
@@ -186,15 +269,28 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
 
       const addonStr = addons.length ? addons.map((a) => a.id).join(", ") : "(none)";
       const hint = profile.buildHints ? `\nBuild note: ${profile.buildHints}` : "";
-      const plan =
-        flow === "initial"
+      // A confirmed migration is an update flow that must go through provision: redeploy alone
+      // would rebuild under the new owner while Coolify still pulls the old image.
+      const plan = migrating
+        ? "MIGRATION flow: provision (re-points the existing app at the new image) -> deploy (build/push under the new namespace), then status."
+        : flow === "initial"
           ? "INITIAL flow: scaffold -> [convex if present] -> provision -> env -> dns -> deploy, then status."
           : "UPDATE flow: [convex if the backend changed] -> redeploy, then status.";
       const volStr = d.scratch.volumeSpecs ? `, volumes ${d.scratch.volumeSpecs}` : "";
       return ok(
         `Detected ${profile.id} (port ${port}, health ${healthPath}${volStr}); addons: ${addonStr}. ` +
-          `Flow: ${flow.toUpperCase()}.${hint}\n${plan}`,
-        { profile: profile.id, addons: d.ledger.addons, flow, port, healthPath },
+          `Image namespace ${d.owner}/${d.repo_name} (from origin remote). Flow: ${flow.toUpperCase()}` +
+          `${migrating ? " + NAMESPACE MIGRATION" : ""}.${hint}\n${plan}`,
+        {
+          profile: profile.id,
+          addons: d.ledger.addons,
+          flow,
+          port,
+          healthPath,
+          owner: d.owner,
+          repo: d.repo_name,
+          migrating,
+        },
       );
     },
   });
@@ -234,7 +330,7 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
       chmodSync(deployShDst, 0o755);
       written.push("deploy/deploy.sh");
 
-      writeEnvDeploy(d.project_dir, { repoName: repoSlug(d.project_dir), subdomain: d.subdomain });
+      writeEnvDeploy(d.project_dir, { owner: d.owner, repoName: d.repo_name, subdomain: d.subdomain });
       ensureGitignored(d.project_dir);
       written.push("deploy/.env.deploy (gitignored)");
 
@@ -296,10 +392,11 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
     name: "provision",
     label: "Provision Coolify app (write)",
     description:
-      "Create the Coolify app for this project (image = <ghcr>/<org>/<repo>), inferring the " +
-      "exposed port from the Dockerfile and setting resource limits. Initial deploy only — " +
-      "guarded so it can only target THIS project's subdomain.",
-    promptSnippet: "Create the Coolify app for this project (initial deploy only).",
+      "Create the Coolify app for this project (image = <ghcr>/<owner>/<repo>, owner+repo from " +
+      "the origin remote), inferring the exposed port from the Dockerfile and setting resource " +
+      "limits. If the app already exists it REPAIRS it instead: re-points it at that image (the " +
+      "namespace-migration step). Guarded so it can only target THIS project's subdomain.",
+    promptSnippet: "Create the Coolify app for this project, or re-point an existing one at its image.",
     parameters: Type.Object({}),
     async execute(_id, _params, _signal, _onUpdate, ctx) {
       setActiveCtx(ctx);
@@ -308,18 +405,38 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
       const profile = getProfile(d.ledger.profile);
       const reg = getRegistry();
       const cf = getCloudflare();
+      const existingUuid = appUuidFor(d);
 
       // Throws on collision — a RECOVERABLE block: the agent relays it to the caller and
       // asks for a free subdomain. Do not write ledger.error here (it would wrongly poison a
       // later successful ship in the same deploy); ledger.error is for terminal failures only.
-      await assertSubdomainFree(d.subdomain, cf.zone_name);
+      await assertSubdomainFree(d.subdomain, cf.zone_name, existingUuid);
 
-      const repoName = repoSlug(d.project_dir);
+      const repoName = d.repo_name;
       // Coolify project = one grouping per repo, named after it (acronym-aware Title Case),
       // unless the caller named one explicitly at detect time.
       const projectName = d.project_name ?? projectDisplayName(repoName);
+      const image = `${reg.ghcr}/${d.owner}/${repoName}`.toLowerCase();
+
+      // Repair, not create: the app already exists (a namespace migration, or a re-run). Only
+      // the pull source moves — uuid, domain, env and volumes stay. Creating here would spawn a
+      // duplicate app on the same subdomain.
+      if (existingUuid) {
+        assertTargetsOurApp(d.project_dir, existingUuid);
+        await updateAppImage(existingUuid, image);
+        writeEnvDeploy(d.project_dir, { owner: d.owner, repoName, subdomain: d.subdomain, appUuid: existingUuid });
+        d.ledger.app_uuid = existingUuid;
+        d.scratch.appUuid = existingUuid;
+        d.scratch.image = image;
+        d.ledger.phase = "provisioned";
+        return ok(
+          `Repaired existing Coolify app ${existingUuid}: image set to ${image}. ` +
+            `Run deploy to build/push it under that namespace (the app pulls the new image only then).`,
+          { app_uuid: existingUuid, image, repaired: true },
+        );
+      }
+
       const projectUuid = await findOrCreateProject(projectName);
-      const image = `${reg.ghcr}/${reg.github_org}/${repoName}`.toLowerCase();
 
       const addons = await detectAddons(d.project_dir);
       const sqlite = addons.find((a) => a.id === "sqlite-volume");
@@ -348,7 +465,7 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
       });
       // Persist the new app uuid + deploy webhook into deploy/.env.deploy so deploy.sh can
       // trigger the deployment (it sources COOLIFY_WEBHOOK_URL from there).
-      writeEnvDeploy(d.project_dir, { repoName, subdomain: d.subdomain, appUuid, webhookUrl });
+      writeEnvDeploy(d.project_dir, { owner: d.owner, repoName, subdomain: d.subdomain, appUuid, webhookUrl });
 
       d.ledger.app_uuid = appUuid;
       d.scratch.appUuid = appUuid;
@@ -478,11 +595,12 @@ export function registerManagerTools(pi: ExtensionAPI, deps: ManagerToolDeps): v
       const d = need("deploy");
       const appUuid = appUuidFor(d);
       if (!appUuid) throw new Error("deploy: no provisioned app yet (run provision first).");
-      const reg = getRegistry();
-      const slug = `${reg.github_org}/${repoSlug(d.project_dir)}`;
+      const slug = `${d.owner}/${d.repo_name}`;
 
-      // Best-effort: ensure the GitHub repo exists as the GHCR image namespace. Non-fatal —
-      // a GHCR push can create the package on its own, and gh may be unavailable.
+      // Best-effort: ensure the GitHub repo exists as the GHCR image namespace. The slug comes
+      // from the origin remote, so it normally already exists — this only bites for a
+      // caller-stated repo (no remote). Non-fatal: a GHCR push can create the package on its
+      // own, and gh may be unavailable.
       const view = await runCommand("gh", ["repo", "view", slug], { cwd: d.project_dir });
       if (view.code !== 0) {
         const create = await runCommand("gh", ["repo", "create", slug, "--private"], { cwd: d.project_dir });

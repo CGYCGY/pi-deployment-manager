@@ -22,8 +22,7 @@
   },
 
   "registry": {
-    "_note": "Where built images are pushed: <ghcr>/<github_org>/<repo>.",
-    "github_org": "your-github-org",
+    "_note": "Registry host only. The <owner>/<repo> half of <ghcr>/<owner>/<repo> is per-project: detect resolves it from the project's git origin remote (no central org, no fallback — a project without a GitHub origin remote is refused).",
     "ghcr": "ghcr.io"
   },
 
