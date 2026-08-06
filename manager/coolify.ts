@@ -20,11 +20,29 @@ async function coolifyFetch(path: string, opts: CoolifyFetchOpts = {}): Promise<
     Accept: "application/json",
   };
   if (opts.body !== undefined) headers["Content-Type"] = "application/json";
-  return fetch(`${c.base_url}${API_PREFIX}${path}`, {
-    method: opts.method ?? "GET",
-    headers,
-    body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-  });
+  const url = `${c.base_url}${API_PREFIX}${path}`;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fetch(url, {
+        method: opts.method ?? "GET",
+        headers,
+        body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+      });
+    } catch (e) {
+      const cause = (e as { cause?: { code?: string; message?: string } }).cause;
+      // Coolify closes idle keep-alive sockets between the LLM's tool calls; undici hands the
+      // dead pooled connection to the next request and won't retry non-idempotent methods
+      // (UND_ERR_SOCKET "other side closed"). The request never reached the server, so one
+      // retry on a fresh connection is safe for every verb.
+      const stalePool = cause?.code === "UND_ERR_SOCKET" || /other side closed/i.test(cause?.message ?? "");
+      if (stalePool && attempt === 0) continue;
+      // Bare fetch rejections say only "fetch failed"; keep the network-level cause or the error is undebuggable.
+      throw new Error(
+        `Coolify fetch ${opts.method ?? "GET"} ${url} failed: ${(e as Error).message}` +
+          (cause ? ` (cause: ${cause.code ?? ""} ${cause.message ?? String(cause)})` : ""),
+      );
+    }
+  }
 }
 
 /** Coolify API call returning parsed JSON; throws on non-2xx (fail closed). */
