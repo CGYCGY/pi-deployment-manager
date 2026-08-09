@@ -23,7 +23,7 @@ Talking to Coolify and Cloudflare is **native HTTP in the verb code** — no she
 skill scripts. The only bundled script is `assets/deploy.sh` (docker build → GHCR push → Coolify
 webhook), copied into each project's `deploy/` as its own deploy command. The LLM reaches none of it:
 a skill is "a prompt telling an LLM to run bash", exactly the capability the gate removes. The manager
-is fully standalone — clone, `npm install`, run; nothing outside the repo.
+is fully standalone — clone, `bun install`, run; nothing outside the repo.
 
 ## The ten verbs
 
@@ -93,9 +93,9 @@ Prerequisites on the host that runs the manager:
 Then:
 
 ```sh
-npm install
+bun install
 cp config.json.example config.json   # fill in your Coolify/Cloudflare/GHCR/Convex creds (gitignored)
-npm run typecheck
+bun run typecheck
 ```
 
 `config.json` is the **single source of truth** for all creds — the manager injects them into each

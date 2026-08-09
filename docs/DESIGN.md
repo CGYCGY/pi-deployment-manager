@@ -170,7 +170,7 @@ are ported into `manager/coolify.ts` and `manager/cloudflare.ts` as native `fetc
 that *cannot* become a fetch — `deploy.sh` (it runs `docker build`/`push`) — ships as a bundled asset
 (`assets/deploy.sh`), copied into each project's `deploy/` as its own deploy command. Per-framework
 Dockerfile templates live in `manager/profiles/`. The model has no path to any of it, and the manager
-depends on **no external `skills_dir`** — clone, `npm install`, run.
+depends on **no external `skills_dir`** — clone, `bun install`, run.
 
 ### 5.0 Sandbox (the gate) — enforced in tool code, not trusted to the LLM
 
