@@ -43,18 +43,26 @@ docker push "${IMAGE}:${TAG}"
 
 echo "==> Image pushed: ${IMAGE}:${TAG}"
 
-if [ -n "${COOLIFY_WEBHOOK_URL:-}" ] && [ -n "${COOLIFY_API_TOKEN:-}" ]; then
-  echo "==> Triggering Coolify redeploy..."
-  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-    -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
-    "${COOLIFY_WEBHOOK_URL}")
-  if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
-    echo "==> Coolify redeploy triggered (HTTP ${HTTP_CODE})"
-  else
-    echo "Warning: Coolify webhook returned HTTP ${HTTP_CODE}" >&2
-  fi
-else
-  echo "==> No COOLIFY_WEBHOOK_URL or COOLIFY_API_TOKEN set. Skipping redeploy trigger."
+if [ -z "${COOLIFY_WEBHOOK_URL:-}" ] || [ -z "${COOLIFY_API_TOKEN:-}" ]; then
+  echo "Error: COOLIFY_WEBHOOK_URL or COOLIFY_API_TOKEN not set; the image is pushed but nothing deployed it." >&2
+  exit 1
 fi
+
+# POST: Coolify answers a GET on /api/v1/deploy with 405 "This endpoint has changed to a POST
+# request." A non-2xx is a failed deploy, not a warning — the image alone changes nothing live.
+echo "==> Triggering Coolify redeploy..."
+RESPONSE=$(curl -sS -X POST -w $'\n%{http_code}' \
+  -H "Authorization: Bearer ${COOLIFY_API_TOKEN}" \
+  "${COOLIFY_WEBHOOK_URL}") || {
+  echo "Error: Coolify webhook unreachable: ${COOLIFY_WEBHOOK_URL%%\?*}" >&2
+  exit 1
+}
+HTTP_CODE="${RESPONSE##*$'\n'}"
+BODY="${RESPONSE%$'\n'*}"
+if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+  echo "Error: Coolify webhook returned HTTP ${HTTP_CODE}: ${BODY}" >&2
+  exit 1
+fi
+echo "==> Coolify redeploy triggered (HTTP ${HTTP_CODE}): ${BODY}"
 
 echo "==> Done."
