@@ -35,8 +35,10 @@ fi
 IMAGE="ghcr.io/$(echo "${GITHUB_ORG}/${REPO_NAME}" | tr '[:upper:]' '[:lower:]')"
 TAG="${1:-latest}"
 
-echo "==> Building ${IMAGE}:${TAG}"
-docker build -f deploy/Dockerfile -t "${IMAGE}:${TAG}" .
+PLATFORM="${DOCKER_PLATFORM:-linux/amd64}"
+
+echo "==> Building ${IMAGE}:${TAG} (${PLATFORM})"
+docker build --platform "${PLATFORM}" -f deploy/Dockerfile -t "${IMAGE}:${TAG}" .
 
 echo "==> Pushing ${IMAGE}:${TAG}"
 docker push "${IMAGE}:${TAG}"
