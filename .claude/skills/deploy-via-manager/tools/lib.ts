@@ -4,7 +4,7 @@
 // hardcoded path), loading its config, the pi spawn argv, JSONL framing, and the
 // notify-marker contract the manager emits.
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -170,4 +170,34 @@ export function takeLines(buf: string): { lines: string[]; rest: string } {
     if (line) lines.push(line);
   }
   return { lines, rest };
+}
+
+/**
+ * Project dirs named in a request that the manager set up before but whose gitignored
+ * deploy/.env.deploy is gone (a fresh clone, another machine). scaffold always writes
+ * deploy/Dockerfile, deploy/deploy.sh and deploy/.env.deploy together, and deploy.sh is the
+ * manager's own bundled asset, so the two committed files prove a prior setup. Without the
+ * .env.deploy the manager cannot find the existing Coolify app and falls back to the initial
+ * flow, so the driver refuses before summoning it.
+ */
+export function missingEnvDeploy(message: string): string[] {
+  const found: string[] = [];
+  for (const m of message.matchAll(/(?:^|[\s"'`(])((?:~|\/)[^\s"'`()]*)/g)) {
+    const dir = expandTilde(m[1].replace(/[.,;:!?]+$/, "").replace(/\/+$/, ""));
+    if (!dir.startsWith("/") || found.includes(dir)) continue;
+    try {
+      if (!statSync(dir).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    const deploy = join(dir, "deploy");
+    if (
+      existsSync(join(deploy, "deploy.sh")) &&
+      existsSync(join(deploy, "Dockerfile")) &&
+      !existsSync(join(deploy, ".env.deploy"))
+    ) {
+      found.push(dir);
+    }
+  }
+  return found;
 }

@@ -81,6 +81,11 @@ MANAGER_LOCATION: the driver resolves the manager checkout from the `PI_DEPLOYME
 - **THEN:** run the `down` tool (idempotent — a one-shot `deploy` already tore down), then report per Report.
 - **EXAMPLES:** "result health:healthy", "result status:failed"
 
+### Deploy config missing
+- **IF:** a tool prints `kind:"error"` with reason `missing_env_deploy`
+- **THEN:** do NOT retry and do NOT delete anything. The project was set up by the manager (committed `deploy/deploy.sh` + `deploy/Dockerfile`) but its gitignored `deploy/.env.deploy` is absent — usually a fresh clone. Tell the user; they restore it from the original checkout, or choose to delete `deploy/deploy.sh` to set the project up as a new app.
+- **EXAMPLES:** "deploy/deploy.sh and deploy/Dockerfile exist but deploy/.env.deploy is missing"
+
 ### Manager won't start / stuck
 - **IF:** a tool prints `kind:"error"` with reason `spawn_failed` / `ready_timeout` / `manager_down` / `timeout`
 - **THEN:** run the `clean` tool, surface the `detail` (point at `<stateDir>/logs/manager.log`), and retry once.

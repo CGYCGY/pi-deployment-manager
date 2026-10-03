@@ -35,6 +35,7 @@ import {
   expandTilde,
   loadManagerCfg,
   type ManagerCfg,
+  missingEnvDeploy,
   parseNotify,
   paths,
   type Paths,
@@ -239,8 +240,24 @@ function sendOnce(p: Paths, message: string): Out {
 
 // ── CLI subcommands ──────────────────────────────────────────────────────────
 
+/** Refuse a request naming a manager-set-up project whose deploy/.env.deploy is missing. */
+function guardEnvDeploy(message: string): void {
+  const dirs = missingEnvDeploy(message);
+  if (!dirs.length) return;
+  emit({
+    kind: "error",
+    reason: "missing_env_deploy",
+    detail:
+      `${dirs.join(", ")}: deploy/deploy.sh and deploy/Dockerfile exist but deploy/.env.deploy is missing. ` +
+      "The manager set this project up before; .env.deploy is gitignored, so a fresh clone lacks it, and " +
+      "without it the manager cannot find the existing Coolify app. Copy it over from the original " +
+      "checkout, or delete deploy/deploy.sh to set the project up as a new app.",
+  });
+}
+
 function cmdDeploy(message: string): never {
   if (!message) emit({ kind: "error", reason: "bad_args", detail: "deploy requires the natural-language deploy request." });
+  guardEnvDeploy(message);
   const managerDir = resolveManagerDir();
   const cfg = loadManagerCfg(managerDir);
   const p = paths(cfg.stateDir);
@@ -264,6 +281,7 @@ function cmdUp(): never {
 
 function cmdSend(message: string): never {
   if (!message) emit({ kind: "error", reason: "bad_args", detail: "send requires a message." });
+  guardEnvDeploy(message);
   const managerDir = resolveManagerDir();
   const cfg = loadManagerCfg(managerDir);
   const p = paths(cfg.stateDir);
