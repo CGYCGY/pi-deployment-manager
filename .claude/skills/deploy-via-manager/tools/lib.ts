@@ -237,7 +237,9 @@ export function takeLines(buf: string): { lines: string[]; rest: string } {
 export function missingEnvDeploy(message: string): string[] {
   const found: string[] = [];
   for (const m of message.matchAll(/(?:^|[\s"'`(])((?:~|\/)[^\s"'`()]*)/g)) {
-    const dir = expandTilde(m[1].replace(/[.,;:!?]+$/, "").replace(/\/+$/, ""));
+    const raw = m[1];
+    if (!raw) continue;
+    const dir = expandTilde(raw.replace(/[.,;:!?]+$/, "").replace(/\/+$/, ""));
     if (!dir.startsWith("/") || found.includes(dir)) continue;
     try {
       if (!statSync(dir).isDirectory()) continue;
