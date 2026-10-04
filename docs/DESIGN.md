@@ -366,7 +366,7 @@ skill is a symlink into it, and the repo-root `setup.sh` (prerequisites, `bun in
 state) leaves only `config.json` and `state/` in `~/.gylab/pi-deployment-manager/`. **Skill mode:**
 only the skill folder is installed; its `setup.sh` clones the repo *into*
 `~/.gylab/pi-deployment-manager/` (where `config.json` and `/state/` are gitignored), fast-forwards
-that clone on re-runs, and execs the repo-root `setup.sh`.
+that clone and refreshes the copied skill folder from it on re-runs, and execs the repo-root `setup.sh`.
 
 Per-**project** deploy state stays in each project's **gitignored `deploy/.env.deploy`** (written by
 the manager: `COOLIFY_APP_UUID`, `COOLIFY_WEBHOOK_URL`, `DOMAIN`, `SUBDOMAIN`, `GITHUB_ORG`,

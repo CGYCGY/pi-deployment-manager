@@ -106,7 +106,8 @@ bun run typecheck && bun run test           # dev checks, not part of setup
 **Skill mode** (you only want to deploy): copy just `.claude/skills/deploy-via-manager/` into
 `~/.claude/skills/`, then run its script. It clones this repo into `~/.gylab/pi-deployment-manager`
 (`--repo` / `$PI_DEPLOYMENT_MANAGER_REPO` to clone from elsewhere) and hands off to the project-level
-script. Re-running it fast-forwards that clone; it never pulls a checkout it did not clone.
+script. Re-running it updates both the clone (fast-forward) and the skill copy; it never pulls a
+checkout it did not clone, nor touches a symlinked skill folder.
 
 ```sh
 bash ~/.claude/skills/deploy-via-manager/setup.sh       # -y for non-interactive
