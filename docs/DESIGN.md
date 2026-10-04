@@ -170,7 +170,7 @@ are ported into `manager/coolify.ts` and `manager/cloudflare.ts` as native `fetc
 that *cannot* become a fetch — `deploy.sh` (it runs `docker build`/`push`) — ships as a bundled asset
 (`assets/deploy.sh`), copied into each project's `deploy/` as its own deploy command. Per-framework
 Dockerfile templates live in `manager/profiles/`. The model has no path to any of it, and the manager
-depends on **no external `skills_dir`** — clone, `bun install`, run.
+depends on **no external `skills_dir`** — clone, `./setup.sh`, run.
 
 ### 5.0 Sandbox (the gate) — enforced in tool code, not trusted to the LLM
 
@@ -341,10 +341,12 @@ clean. A deploy is never reset mid-flow (would orphan an in-flight ship) — `co
 
 ## 11. Config (`config.json`, single source of truth)
 
-Manager-owned config; no hardcoded paths/creds (no transport keys — RPC is over stdio, so there is
-no port or token to configure):
+Manager-owned config at **`~/.gylab/pi-deployment-manager/config.json`** (`PI_DEPLOYMENT_MANAGER_CONFIG`
+overrides the path); no creds in the repo (no transport keys — RPC is over stdio, so there is no port
+or token to configure):
 
-- `stateDir` — where the manager writes its logs (`<stateDir>/logs/manager.log`).
+- `stateDir` — default `~/.gylab/pi-deployment-manager/state`: the manager's logs
+  (`<stateDir>/logs/manager.log`) and the driver's session files (`client.in/out/json`).
 - `coolify.{base_url, api_token, server_uuid, dest_uuid}` — central Coolify creds.
 - `cloudflare.{api_token, zone_id, zone_name}` — central Cloudflare creds + the one domain.
 - `registry.{ghcr}` — registry host only. The `<owner>/<repo>` half is per-project, from the
@@ -352,9 +354,19 @@ no port or token to configure):
 - `convex.deploy_key` — Convex Cloud deploy key.
 - `model` / `thinking` — optional manager session model + reasoning tier (matches the pi-e2e-tester hub).
 
-The **client driver** (in the `deploy-via-manager` skill, not this repo) resolves *this* checkout's
-location from the `PI_DEPLOYMENT_MANAGER_DIR` env var or a skill-local config — never a hardcoded
-path — and spawns it as `pi --mode rpc`.
+The **client driver** (in the `deploy-via-manager` skill) resolves *this* checkout, first match wins:
+the `PI_DEPLOYMENT_MANAGER_DIR` env var; the optional skill-local `config.json` `{managerDir}`; the
+checkout the skill folder really sits in (realpath, so a skill symlinked into `~/.claude/skills`
+finds its clone); `~/.gylab/pi-deployment-manager`. None ⇒ an error naming the skill's `setup.sh`.
+It reads the same config file as the manager (for `stateDir`, `model`, `thinking`) and spawns the
+checkout as `pi --mode rpc`.
+
+Two install modes share that one data folder. **Developer mode:** the repo is cloned anywhere, the
+skill is a symlink into it, and the repo-root `setup.sh` (prerequisites, `bun install`, config +
+state) leaves only `config.json` and `state/` in `~/.gylab/pi-deployment-manager/`. **Skill mode:**
+only the skill folder is installed; its `setup.sh` clones the repo *into*
+`~/.gylab/pi-deployment-manager/` (where `config.json` and `/state/` are gitignored), fast-forwards
+that clone on re-runs, and execs the repo-root `setup.sh`.
 
 Per-**project** deploy state stays in each project's **gitignored `deploy/.env.deploy`** (written by
 the manager: `COOLIFY_APP_UUID`, `COOLIFY_WEBHOOK_URL`, `DOMAIN`, `SUBDOMAIN`, `GITHUB_ORG`,
@@ -362,8 +374,8 @@ the manager: `COOLIFY_APP_UUID`, `COOLIFY_WEBHOOK_URL`, `DOMAIN`, `SUBDOMAIN`, `
 the bundled `deploy.sh`; the manager populates the cred fields from central config at deploy time and
 never commits them.
 
-A `config.json.example` (placeholder template + inline notes) ships; live `config.json` is
-gitignored — same convention as pi-e2e-tester.
+A `config.json.example` (placeholder template + inline notes) ships; `setup.sh` writes the live
+config from it and lists the `CHANGE-ME` values still to fill in.
 
 ---
 

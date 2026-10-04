@@ -326,7 +326,7 @@
         <div class="dec"><dt>transport</dt><dd><b>pi's native RPC mode</b> — stdin/stdout JSONL; no HTTP server, no port, no token. The skill driver owns the process pipes.</dd></div>
         <div class="dec"><dt>lifecycle</dt><dd><b>Spawn-on-demand</b> by the skill driver (<code style="font-family:var(--mono)">pi --mode rpc</code>), no daemon — deploys are infrequent; nothing to babysit.</dd></div>
         <div class="dec"><dt>interface</dt><dd><b>NL conversation</b> — the LLM reads the prompt; <b>detect</b> takes project_dir/subdomain/env_file. Blocked ⇒ it asks back. Typed door deferred.</dd></div>
-        <div class="dec"><dt>driver</dt><dd>Lives in the <b>deploy-via-manager skill</b> (not this repo); resolves this checkout via <code style="font-family:var(--mono)">PI_DEPLOYMENT_MANAGER_DIR</code> / skill config — never hardcoded.</dd></div>
+        <div class="dec"><dt>driver</dt><dd>Lives in the <b>deploy-via-manager skill</b> (not this repo); resolves this checkout via <code style="font-family:var(--mono)">PI_DEPLOYMENT_MANAGER_DIR</code> / skill config / the checkout it sits in / <code style="font-family:var(--mono)">~/.gylab/pi-deployment-manager</code>.</dd></div>
         <div class="dec"><dt>result</dt><dd>Built <b>in code from the ledger</b>, emitted on a <b>notify</b> channel (<code style="font-family:var(--mono)">PIDEPLOY_RESULT</code>); a deploy concludes only when a ship verb health-checks the app.</dd></div>
         <div class="dec"><dt>project access</dt><dd>Both modes, <b>operate in place</b> — no clone. Initial writes+commits; update is API-only.</dd></div>
         <div class="dec"><dt>subdomain</dt><dd><b>Caller-specified</b> per deploy; collision-guarded against the single shared domain.</dd></div>

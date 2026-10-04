@@ -1,4 +1,6 @@
 config.json
+# A skill-mode clone in ~/.gylab/pi-deployment-manager keeps its runtime state here.
+/state/
 node_modules/
 *.log
 logs/

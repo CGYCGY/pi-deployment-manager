@@ -32,7 +32,7 @@ import {
 import readline from "node:readline";
 
 import {
-  expandTilde,
+  defaultStateDir,
   loadManagerCfg,
   type ManagerCfg,
   missingEnvDeploy,
@@ -128,8 +128,21 @@ interface BringUp {
 }
 
 /** Ensure a live, READY manager session (reuse if up); spawn the detached __manager otherwise. */
-function bringUp(managerDir: string, _cfg: ManagerCfg, p: Paths): BringUp {
+function bringUp(managerDir: string, cfg: ManagerCfg, p: Paths): BringUp {
   if (sessionLive(p)) return { ok: true, reused: true };
+  // Without its config the manager dies before it can open a log, which would surface as an
+  // opaque spawn_failed/manager_down.
+  if (!existsSync(cfg.configPath)) {
+    return {
+      ok: false,
+      reused: false,
+      err: {
+        kind: "error",
+        reason: "no_config",
+        detail: `manager config not found at ${cfg.configPath}. Run setup.sh (next to SKILL.md, or in the manager checkout) to create it, then fill in its CHANGE-ME values.`,
+      },
+    };
+  }
   mkdirSync(p.dir, { recursive: true });
   // Clear any stale files from a dead session so we don't read its leftovers.
   rmSync(p.fifo, { force: true });
@@ -259,7 +272,7 @@ function cmdDeploy(message: string): never {
   if (!message) emit({ kind: "error", reason: "bad_args", detail: "deploy requires the natural-language deploy request." });
   guardEnvDeploy(message);
   const managerDir = resolveManagerDir();
-  const cfg = loadManagerCfg(managerDir);
+  const cfg = loadManagerCfg();
   const p = paths(cfg.stateDir);
   const up = bringUp(managerDir, cfg, p);
   if (up.err) emit(up.err);
@@ -272,7 +285,7 @@ function cmdDeploy(message: string): never {
 
 function cmdUp(): never {
   const managerDir = resolveManagerDir();
-  const cfg = loadManagerCfg(managerDir);
+  const cfg = loadManagerCfg();
   const p = paths(cfg.stateDir);
   const up = bringUp(managerDir, cfg, p);
   if (up.err) emit(up.err);
@@ -282,15 +295,13 @@ function cmdUp(): never {
 function cmdSend(message: string): never {
   if (!message) emit({ kind: "error", reason: "bad_args", detail: "send requires a message." });
   guardEnvDeploy(message);
-  const managerDir = resolveManagerDir();
-  const cfg = loadManagerCfg(managerDir);
+  const cfg = loadManagerCfg();
   const p = paths(cfg.stateDir);
   emit(sendOnce(p, message)); // never auto-downs — the caller controls the session lifecycle
 }
 
 function cmdDown(): never {
-  const managerDir = resolveManagerDir();
-  const cfg = loadManagerCfg(managerDir);
+  const cfg = loadManagerCfg();
   const p = paths(cfg.stateDir);
   const had = sessionLive(p) || existsSync(p.state);
   tearDown(p);
@@ -298,13 +309,13 @@ function cmdDown(): never {
 }
 
 function cmdClean(): never {
-  let stateDir = "~/.pi-deployment-manager";
+  let stateDir = defaultStateDir();
   try {
-    stateDir = loadManagerCfg(resolveManagerDir()).stateDir;
+    stateDir = loadManagerCfg().stateDir;
   } catch {
-    /* fall back to default state dir for cleanup */
+    /* an unreadable config must not block cleanup */
   }
-  const p = paths(expandTilde(stateDir));
+  const p = paths(stateDir);
   const r = spawnSync("pkill", ["-TERM", "-f", PI_NAME], { encoding: "utf8" });
   sleep(1);
   rmSync(p.fifo, { force: true });
@@ -320,7 +331,7 @@ function cmdClean(): never {
 
 function runManager(): never {
   const managerDir = resolveManagerDir();
-  const cfg = loadManagerCfg(managerDir);
+  const cfg = loadManagerCfg();
   const p = paths(cfg.stateDir);
   mkdirSync(p.dir, { recursive: true });
   if (!existsSync(p.fifo)) spawnSync("mkfifo", [p.fifo]);

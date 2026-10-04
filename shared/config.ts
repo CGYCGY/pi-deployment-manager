@@ -25,8 +25,19 @@ const HERE = dirname(fileURLToPath(import.meta.url));
  */
 export const PROJECT_DIR = resolve(HERE, "..");
 
-/** Absolute path to config.json (project root, parent of shared/). */
-export const CONFIG_PATH = resolve(PROJECT_DIR, "config.json");
+/**
+ * Per-user data home, shared by every install mode: a developer checkout under ~/projects and a
+ * skill-mode clone living at this very path both read config and write state here.
+ */
+export const DATA_DIR = join(home(), ".gylab", "pi-deployment-manager");
+
+/** The manager config; PI_DEPLOYMENT_MANAGER_CONFIG overrides it (tests, unusual setups). */
+export const CONFIG_PATH = process.env.PI_DEPLOYMENT_MANAGER_CONFIG?.trim()
+  ? resolve(expandTilde(process.env.PI_DEPLOYMENT_MANAGER_CONFIG.trim()))
+  : join(DATA_DIR, "config.json");
+
+/** Logs and the skill driver's session files, unless config.json sets stateDir. */
+export const DEFAULT_STATE_DIR = join(DATA_DIR, "state");
 
 /** Bundled assets shipped with the manager (e.g. deploy.sh copied into a project). */
 export const ASSETS_DIR = resolve(PROJECT_DIR, "assets");
@@ -83,10 +94,16 @@ export interface Config {
   thinking?: string;
 }
 
+// $HOME first: Bun's os.homedir() caches its first answer, and the skill driver (run by Bun)
+// must agree with this module on every path.
+function home(): string {
+  return process.env.HOME || homedir();
+}
+
 /** Expand a leading "~" or "~/" to the user's home directory. */
 export function expandTilde(p: string): string {
-  if (p === "~") return homedir();
-  if (p.startsWith("~/")) return join(homedir(), p.slice(2));
+  if (p === "~") return home();
+  if (p.startsWith("~/")) return join(home(), p.slice(2));
   return p;
 }
 
@@ -121,7 +138,7 @@ function parseConfig(raw: unknown): Config {
 
   return {
     projectDir: PROJECT_DIR,
-    stateDir: expandTilde(String(r.stateDir ?? "~/.pi-deployment-manager")),
+    stateDir: typeof r.stateDir === "string" && r.stateDir.length > 0 ? expandTilde(r.stateDir) : DEFAULT_STATE_DIR,
     coolify: {
       base_url: reqStr(coolify, "coolify", "base_url"),
       api_token: reqStr(coolify, "coolify", "api_token"),
@@ -153,7 +170,10 @@ export function loadConfig(): Config {
   try {
     text = readFileSync(CONFIG_PATH, "utf8");
   } catch (err) {
-    throw new Error(`config.json not found at ${CONFIG_PATH}: ${(err as Error).message}`);
+    throw new Error(
+      `manager config not found at ${CONFIG_PATH} (${(err as Error).message}). ` +
+        "Run setup.sh in the manager checkout (or the deploy-via-manager skill's setup.sh) to create it.",
+    );
   }
   cached = parseConfig(JSON.parse(text));
   return cached;

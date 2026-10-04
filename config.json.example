@@ -1,8 +1,8 @@
 {
-  "_about": "Single source of truth for pi-deployment-manager. Copy to config.json (gitignored) and fill in. This is the ONLY place deployment creds live — the manager writes them into each project's gitignored deploy/.env.deploy at deploy time and NEVER commits them, so your projects stop carrying secrets.",
+  "_about": "Single source of truth for pi-deployment-manager. setup.sh writes it to ~/.gylab/pi-deployment-manager/config.json (override: PI_DEPLOYMENT_MANAGER_CONFIG); fill in every CHANGE-ME value there. This is the ONLY place deployment creds live — the manager writes them into each project's gitignored deploy/.env.deploy at deploy time and NEVER commits them, so your projects stop carrying secrets.",
 
-  "stateDir": "~/.pi-deployment-manager",
-  "_stateDir_note": "Where the manager writes its logs (<stateDir>/logs/manager.log). The client driver also keeps its session state here.",
+  "stateDir": "~/.gylab/pi-deployment-manager/state",
+  "_stateDir_note": "Where the manager writes its logs (<stateDir>/logs/manager.log). The deploy-via-manager driver also keeps its session files (client.in/out/json) here.",
 
   "coolify": {
     "_note": "The one Coolify VPS every project deploys to.",

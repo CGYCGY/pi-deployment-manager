@@ -16,7 +16,8 @@ Hand a deployment to the gated pi-deployment-manager by conversing with it over 
 
 USER_INPUT: $ARGUMENTS
 DRIVER: `${CLAUDE_SKILL_DIR}/tools/session.ts` (run with `bun`)
-MANAGER_LOCATION: the driver resolves the manager checkout from the `PI_DEPLOYMENT_MANAGER_DIR` env var, else `${CLAUDE_SKILL_DIR}/config.json` (`{"managerDir": "..."}`). No path is assumed — if neither is set the driver errors. Fix by setting the env var or copying `config.json.example` to `config.json`.
+MANAGER_LOCATION: the driver resolves the manager checkout from the `PI_DEPLOYMENT_MANAGER_DIR` env var, else `${CLAUDE_SKILL_DIR}/config.json` (`{"managerDir": "..."}`, optional), else the checkout this skill folder really sits in (a symlinked skill), else `~/.gylab/pi-deployment-manager`. The manager's config and state live in `~/.gylab/pi-deployment-manager/` (`config.json`, `state/`). If the driver reports no manager checkout or `no_config`, run `bash "${CLAUDE_SKILL_DIR}/setup.sh" -y`, then have the user fill in the CHANGE-ME values it lists.
+SETUP: `${CLAUDE_SKILL_DIR}/setup.sh` — finds or clones the manager checkout and runs its own `setup.sh` (prerequisite checks, `bun install`, config + state under `~/.gylab/pi-deployment-manager`).
 
 ## Instructions
 
@@ -64,7 +65,7 @@ MANAGER_LOCATION: the driver resolves the manager checkout from the `PI_DEPLOYME
 
 ## Workflow
 
-1. Resolve from USER_INPUT: the absolute project_dir, the subdomain, the intent (map "first time / initial" → initial deploy, else → redeploy after update), and any runtime env-file path. Check the Preparing-the-project items. If MANAGER_LOCATION is unset, tell the user to set it and stop.
+1. Resolve from USER_INPUT: the absolute project_dir, the subdomain, the intent (map "first time / initial" → initial deploy, else → redeploy after update), and any runtime env-file path. Check the Preparing-the-project items. If the driver reports no manager checkout or no config, follow MANAGER_LOCATION; if the CHANGE-ME values are still unset, tell the user and stop.
 2. Run the `deploy` tool with a request like: `deploy /abs/proj at subdomain myapp, initial deploy; runtime env deploy/.env.runtime`. The call is synchronous and may take minutes — do not poll, time out, or re-run it.
 3. Parse the LAST JSON line and branch (see Cookbook): loop the `send` tool for any `reply` until you get `kind:"result"`, then run the `down` tool.
 4. Report per the Report section.

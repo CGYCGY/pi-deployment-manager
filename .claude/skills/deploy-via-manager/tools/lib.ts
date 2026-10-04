@@ -1,18 +1,18 @@
 // Shared helpers for the deploy-via-manager RPC driver. The driver summons the gated
 // pi-deployment-manager over pi's native --mode rpc (stdin/stdout JSONL, no HTTP/port)
-// and converses with it. This file owns: locating the manager (config only, never a
-// hardcoded path), loading its config, the pi spawn argv, JSONL framing, and the
-// notify-marker contract the manager emits.
+// and converses with it. This file owns: locating the manager checkout, loading its
+// config, the pi spawn argv, JSONL framing, and the notify-marker contract the manager emits.
 
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// The skill root (parent of tools/), self-located so config resolution is independent
-// of the caller's cwd.
+// The skill root (parent of tools/), self-located so config resolution is independent of the
+// caller's cwd. Realpath'd so a skill folder symlinked into ~/.claude/skills resolves to the
+// checkout it lives in.
 const TOOLS_DIR = dirname(fileURLToPath(import.meta.url));
-export const SKILL_DIR = resolve(TOOLS_DIR, "..");
+export const SKILL_DIR = realpathSync(resolve(TOOLS_DIR, ".."));
 
 // Notify markers the manager emits on the RPC event stream (extension_ui_request /
 // method:"notify"). READY = session booted; RESULT = a code-derived DeployResult JSON.
@@ -23,40 +23,86 @@ export const RESULT_MARK = "PIDEPLOY_RESULT";
 // manager's pi without matching the driver's own argv.
 export const PI_NAME = "pi-deployment-manager:rpc";
 
+// Bun's os.homedir() caches its first answer, so a changed $HOME (tests, sudo -E) would be missed.
+function home(): string {
+  return process.env.HOME || homedir();
+}
+
 export function expandTilde(p: string): string {
-  if (p === "~") return homedir();
-  if (p.startsWith("~/")) return join(homedir(), p.slice(2));
+  if (p === "~") return home();
+  if (p.startsWith("~/")) return join(home(), p.slice(2));
   return p;
 }
 
+// Must match shared/config.ts in the manager: both sides read the same config and state paths.
+// Functions, not constants, so a test can swap HOME between cases.
+export function dataDir(): string {
+  return join(home(), ".gylab", "pi-deployment-manager");
+}
+
+export function managerConfigPath(): string {
+  const override = process.env.PI_DEPLOYMENT_MANAGER_CONFIG?.trim();
+  return override ? resolve(expandTilde(override)) : join(dataDir(), "config.json");
+}
+
+export function defaultStateDir(): string {
+  return join(dataDir(), "state");
+}
+
+export function isManagerCheckout(dir: string): boolean {
+  try {
+    const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as { name?: unknown };
+    if (pkg.name === "pi-deployment-manager") return true;
+  } catch {
+    /* no or unreadable package.json: fall through to the layout check */
+  }
+  return existsSync(join(dir, "manager")) && existsSync(join(dir, "shared", "config.ts"));
+}
+
 /**
- * Resolve the pi-deployment-manager checkout — CONFIG ONLY, never a hardcoded fallback.
- * Order: PI_DEPLOYMENT_MANAGER_DIR env var, then the skill-local config.json {managerDir}.
- * If neither is set (or the path is not a manager checkout), throw a clear, actionable error.
+ * Resolve the pi-deployment-manager checkout. Order: PI_DEPLOYMENT_MANAGER_DIR, the skill-local
+ * config.json {managerDir}, the checkout the skill folder really sits in (developer mode: the
+ * skill is a symlink into it), then ~/.gylab/pi-deployment-manager (skill mode: setup.sh clones
+ * it there). An explicit location that is not a checkout is an error, never skipped.
  */
-export function resolveManagerDir(): string {
-  const fromEnv = process.env.PI_DEPLOYMENT_MANAGER_DIR?.trim();
-  let dir = fromEnv || readSkillConfig().managerDir?.trim();
-  if (!dir) {
-    throw new Error(
-      "manager location not configured. Set PI_DEPLOYMENT_MANAGER_DIR, or add " +
-        `{"managerDir": "/abs/path/to/pi-deployment-manager"} to ${join(SKILL_DIR, "config.json")} ` +
-        "(see config.json.example). No path is assumed.",
-    );
+export function resolveManagerDir(skillDir: string = SKILL_DIR): string {
+  const explicit: [string, string | undefined][] = [
+    ["PI_DEPLOYMENT_MANAGER_DIR", process.env.PI_DEPLOYMENT_MANAGER_DIR?.trim()],
+    [join(skillDir, "config.json"), readSkillConfig(skillDir).managerDir?.trim()],
+  ];
+  for (const [source, value] of explicit) {
+    if (!value) continue;
+    const dir = resolve(expandTilde(value));
+    if (!isManagerCheckout(dir)) {
+      throw new Error(`manager dir "${dir}" (from ${source}) is not a pi-deployment-manager checkout.`);
+    }
+    return dir;
   }
-  dir = expandTilde(dir);
-  if (!existsSync(join(dir, "manager", "index.ts"))) {
-    throw new Error(`manager dir "${dir}" is not a pi-deployment-manager checkout (no manager/index.ts).`);
+
+  let real = skillDir;
+  try {
+    real = realpathSync(skillDir);
+  } catch {
+    /* a vanished skill dir just fails the checkout test below */
   }
-  return dir;
+  const enclosing = resolve(real, "..", "..", "..");
+  if (isManagerCheckout(enclosing)) return enclosing;
+
+  if (isManagerCheckout(dataDir())) return dataDir();
+
+  throw new Error(
+    "no pi-deployment-manager checkout found (checked PI_DEPLOYMENT_MANAGER_DIR, " +
+      `${join(skillDir, "config.json")}, the checkout enclosing ${real}, and ${dataDir()}). ` +
+      `Run \`bash "${join(skillDir, "setup.sh")}" -y\` to clone and set it up.`,
+  );
 }
 
 interface SkillConfig {
   managerDir?: string;
 }
 
-function readSkillConfig(): SkillConfig {
-  const file = join(SKILL_DIR, "config.json");
+function readSkillConfig(skillDir: string): SkillConfig {
+  const file = join(skillDir, "config.json");
   if (!existsSync(file)) return {};
   try {
     return JSON.parse(readFileSync(file, "utf8")) as SkillConfig;
@@ -66,6 +112,8 @@ function readSkillConfig(): SkillConfig {
 }
 
 export interface ManagerCfg {
+  /** The config file both the manager and this driver read. */
+  configPath: string;
   /** Where the manager (and this driver) keep state/logs. */
   stateDir: string;
   /** pi model + thinking overrides (passed to the spawned pi). */
@@ -73,21 +121,27 @@ export interface ManagerCfg {
   thinking?: string;
 }
 
-/** Read the manager's own config.json for stateDir + model/thinking (creds stay untouched). */
-export function loadManagerCfg(managerDir: string): ManagerCfg {
-  const file = join(managerDir, "config.json");
+/**
+ * Read stateDir + model/thinking from the manager's config (creds stay untouched). A missing file
+ * yields the defaults so `down`/`clean` still work; commands that spawn the manager check
+ * configPath themselves.
+ */
+export function loadManagerCfg(): ManagerCfg {
+  const file = managerConfigPath();
   let raw: Record<string, unknown> = {};
   if (existsSync(file)) {
     try {
       raw = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
     } catch {
-      throw new Error(`manager config.json is not valid JSON: ${file}`);
+      throw new Error(`manager config is not valid JSON: ${file}`);
     }
   }
   const str = (v: unknown): string | undefined =>
     typeof v === "string" && v.length > 0 ? v : undefined;
+  const stateDir = str(raw.stateDir);
   return {
-    stateDir: expandTilde(str(raw.stateDir) ?? "~/.pi-deployment-manager"),
+    configPath: file,
+    stateDir: stateDir ? expandTilde(stateDir) : defaultStateDir(),
     model: str(raw.model),
     thinking: str(raw.thinking),
   };

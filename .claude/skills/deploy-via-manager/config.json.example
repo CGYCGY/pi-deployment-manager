@@ -1,4 +1,4 @@
 {
-  "_about": "Where the pi-deployment-manager checkout lives, so this skill's driver can summon it. Copy to config.json (gitignored) and set the absolute path. The PI_DEPLOYMENT_MANAGER_DIR env var, if set, takes precedence over this file. There is NO hardcoded default — one of the two MUST be set.",
+  "_about": "Optional. Pins the pi-deployment-manager checkout this skill's driver summons; copy to config.json (gitignored) only when the defaults miss it. Resolution order: PI_DEPLOYMENT_MANAGER_DIR env var, this file, the checkout this skill folder really sits in (symlinks resolved), then ~/.gylab/pi-deployment-manager (where setup.sh clones it).",
   "managerDir": "/abs/path/to/pi-deployment-manager"
 }

@@ -23,7 +23,8 @@ Talking to Coolify and Cloudflare is **native HTTP in the verb code** — no she
 skill scripts. The only bundled script is `assets/deploy.sh` (docker build → GHCR push → Coolify
 webhook), copied into each project's `deploy/` as its own deploy command. The LLM reaches none of it:
 a skill is "a prompt telling an LLM to run bash", exactly the capability the gate removes. The manager
-is fully standalone — clone, `bun install`, run; nothing outside the repo.
+is fully standalone — clone, `./setup.sh`, run; nothing outside the repo except its config and state
+in `~/.gylab/pi-deployment-manager/`.
 
 ## The ten verbs
 
@@ -84,19 +85,49 @@ mounts empty).
 
 Prerequisites on the host that runs the manager:
 
-- [`pi`](../pi-references), `bun`
+- [`pi`](../pi-references) (`npm install -g @earendil-works/pi-coding-agent`), `bun`
 - `docker`, logged in to GHCR: `docker login ghcr.io` (the image build host)
 - `curl` — used by the bundled `deploy.sh` to trigger the Coolify webhook
 - `gh`, authenticated (`gh auth login`) — for the GHCR image repo
 - `npx` (for `convex deploy`, only if you deploy Convex projects)
 
-Then:
+Two scripts, two install modes, one data folder.
+
+**Developer mode** (you work on this repo): clone it anywhere, symlink the skill, run the
+project-level script.
 
 ```sh
-bun install
-cp config.json.example config.json   # fill in your Coolify/Cloudflare/GHCR/Convex creds (gitignored)
-bun run typecheck
+cd /path/to/your/pi-deployment-manager    # your clone
+ln -s "$PWD/.claude/skills/deploy-via-manager" ~/.claude/skills/deploy-via-manager
+./setup.sh          # or -y to copy config.json.example without prompting
+bun run typecheck && bun run test           # dev checks, not part of setup
 ```
+
+**Skill mode** (you only want to deploy): copy just `.claude/skills/deploy-via-manager/` into
+`~/.claude/skills/`, then run its script. It clones this repo into `~/.gylab/pi-deployment-manager`
+(`--repo` / `$PI_DEPLOYMENT_MANAGER_REPO` to clone from elsewhere) and hands off to the project-level
+script. Re-running it fast-forwards that clone; it never pulls a checkout it did not clone.
+
+```sh
+bash ~/.claude/skills/deploy-via-manager/setup.sh       # -y for non-interactive
+```
+
+The project-level `setup.sh` checks the prerequisites above (only a missing `bun` is fatal; it never
+logs in to anything), runs `bun install`, creates the data folder and, if there is no config yet,
+writes one from `config.json.example`, asking for each value (`-y` copies the example as is). An
+existing config is never touched. It ends by listing every `CHANGE-ME` value still to fill in: the
+manager cannot deploy until they are real.
+
+All user data lives in one folder, whichever mode installed it:
+
+```
+~/.gylab/pi-deployment-manager/
+  config.json   # all creds; PI_DEPLOYMENT_MANAGER_CONFIG overrides the path
+  state/        # logs/manager.log + the driver's session files (client.in/out/json)
+```
+
+In skill mode that folder **is** the clone (`config.json` and `/state/` are gitignored there); in
+developer mode it holds only those two.
 
 `config.json` is the **single source of truth** for all creds — the manager injects them into each
 project's gitignored `deploy/.env.deploy` at deploy time and never commits them.
@@ -106,8 +137,15 @@ project's gitignored `deploy/.env.deploy` at deploy time and never commits them.
 A project agent never deploys by hand — it uses the **`deploy-via-manager` skill**, whose driver
 (a `bun` tool) summons the manager and relays the result. The driver, not this repo, owns the RPC
 plumbing — the same split as `pi-e2e-tester`, whose driver lives in the consuming project's skill,
-not the tester repo. The driver locates this checkout from the `PI_DEPLOYMENT_MANAGER_DIR` env var
-or a skill-local config — never a hardcoded path.
+not the tester repo. The driver locates this checkout, first match wins:
+
+1. the `PI_DEPLOYMENT_MANAGER_DIR` env var;
+2. the skill-local `config.json` `{"managerDir": "..."}` (optional);
+3. the checkout the skill folder really sits in (symlinks resolved — developer mode);
+4. `~/.gylab/pi-deployment-manager` (skill mode).
+
+With none of them a checkout, it fails with a pointer to the skill's `setup.sh`. Either way it reads
+the same `~/.gylab/pi-deployment-manager/config.json` as the manager.
 
 The driver spawns the manager with **`pi --mode rpc`** (stdin/stdout JSONL — no HTTP server, no TCP
 port, no token, no portfile) and sends a natural-language prompt:
