@@ -192,6 +192,24 @@ time the manager **populates the project's gitignored `deploy/.env.deploy` from 
 for the bundled `deploy.sh` to source; its own Coolify/Cloudflare API calls read creds straight from
 config. Projects stop carrying secrets. *(Locked.)*
 
+### 5.2 System prompt — the manager's own, not pi's
+
+The driver passes `--system-prompt .pi/SYSTEM_BASE.md` and `--append-system-prompt .pi/APPEND_SYSTEM.md`
+(explicit paths: pi auto-loads `.pi/` prompt files only under project trust, which RPC mode cannot
+grant). The model's system prompt renders as:
+
+1. **preamble** — `.pi/SYSTEM_BASE.md`: the manager's identity and capability boundary. Replaces pi's
+   stock coding-assistant preamble.
+2. **`<addendum>`** — `.pi/APPEND_SYSTEM.md`: no outside project context applies.
+3. **`<cwd>`** — rendered by pi.
+4. **`MANAGER_RULES`** (`manager/index.ts`) — every verb's one-line purpose, the two flows, and the
+   caller rules; appended in `before_agent_start` every run.
+
+With a custom prompt pi does **not** render its generated `<tools>`, `<rules>` or `<docs>` sections,
+by design: the verbs still reach the model as tool schemas, and `MANAGER_RULES` is the only prose
+list of them (`manager/verbs.test.ts` pins one line per verb). The base file is deliberately not
+named `.pi/SYSTEM.md`, a trust-protected name pi would auto-discover.
+
 ---
 
 ## 6. DeployProfile registry — the DeviceProfile analog

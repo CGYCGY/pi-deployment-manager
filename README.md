@@ -17,7 +17,9 @@ The manager LLM has **no raw `read`/`bash`/`edit`/`write`** (nor the off-by-defa
 registers (and on session start `setActiveTools` re-pins the active set to exactly those eleven,
 belt-and-braces). Their code enforces a path sandbox (it may only write a project's `deploy/`
 directory, `.gitignore`, and `.env.production`) and three fail-closed guards. The wrong action is
-*unrepresentable*, not merely discouraged. One purpose, one agent, one deploy at a time.
+*unrepresentable*, not merely discouraged. One purpose, one agent, one deploy at a time. Its
+system prompt is its own too: `.pi/SYSTEM_BASE.md` replaces pi's coding-assistant preamble
+([DESIGN §5.2](./docs/DESIGN.md)).
 
 Talking to Coolify and Cloudflare is **native HTTP in the verb code** — no shelling out, no external
 skill scripts. The only bundled script is `assets/deploy.sh` (docker build → GHCR push → Coolify
