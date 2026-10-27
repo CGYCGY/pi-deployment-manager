@@ -31,13 +31,15 @@ const ROLE: Role = "manager";
 const READY_MARK = "PIDEPLOY_READY";
 const RESULT_MARK = "PIDEPLOY_RESULT";
 
-// The manager's persona, layered onto pi's base prompt every turn. Deliberately flow-
-// level only — per-project/per-framework specifics live in the DeployProfiles the verbs
-// resolve, never here (a hardcoded-wrong premise would be worse than none).
-const MANAGER_RULES = `
+// The manager's verbs + flows, appended after <cwd> every run. With the custom base prompt
+// (.pi/SYSTEM_BASE.md via --system-prompt) pi renders no <tools> list, so this is the only
+// place the model reads each verb's purpose — every verb must keep its line here (verbs.test.ts).
+// Deliberately flow-level only — per-project/per-framework specifics live in the DeployProfiles
+// the verbs resolve, never here (a hardcoded-wrong premise would be worse than none).
+export const MANAGER_RULES = `
 
 ## pi-deployment-manager
-You are the deployment manager — a single-purpose, gated service a project agent talks to over RPC. The caller converses with you: each message is a natural-language deployment request or a reply to a question you asked. Built-in tools (read, bash, edit, write, grep, find, ls) are DISABLED — your ONLY tools are these eleven verbs, by design:
+The caller is a project agent talking to you over RPC: each message is a natural-language deployment request or a reply to a question you asked. Built-in tools (read, bash, edit, write, grep, find, ls) are DISABLED — your ONLY tools are these eleven verbs, by design:
 
 - detect (read) — START HERE on every new request. Takes project_dir (absolute), subdomain, optional env_file (a path, relative to project_dir, to a gitignored runtime dotenv of secrets), and optional project_name (the Coolify grouping name — pass only if the caller explicitly named one; else it is derived from the repo name). It binds the deploy, inspects the project, picks its profile (a framework profile, or the generic "dockerfile" profile that honors a project's own Dockerfile) + backend addons, resolves the image namespace from the project's git origin remote, and tells you the flow.
   - No GitHub origin remote ⇒ detect REFUSES: relay it, and once the caller states the repo, call detect again with repo:"owner/name". Never invent one.

@@ -48,10 +48,15 @@ test("paths that are not directories, and messages with no path, pass", () => {
   expect(missingEnvDeploy("yes, go ahead")).toEqual([]);
 });
 
-test("pi gets the manager's APPEND_SYSTEM.md explicitly, never a blanket project-trust grant", () => {
+test("pi gets the manager's own base prompt and APPEND_SYSTEM.md explicitly, never a blanket project-trust grant", () => {
   const managerDir = join(import.meta.dir, "..", "..", "..", "..");
   const args = piArgs(managerDir, { configPath: "", stateDir: "" });
+  const s = args.indexOf("--system-prompt");
+  expect(s).toBeGreaterThanOrEqual(0);
+  expect(args[s + 1]).toBe(join(managerDir, ".pi", "SYSTEM_BASE.md"));
+  expect(existsSync(args[s + 1] ?? "")).toBe(true);
   const i = args.indexOf("--append-system-prompt");
+  expect(i).toBeGreaterThanOrEqual(0);
   expect(args[i + 1]).toBe(join(managerDir, ".pi", "APPEND_SYSTEM.md"));
   expect(existsSync(args[i + 1] ?? "")).toBe(true);
   expect(args).not.toContain("--approve");

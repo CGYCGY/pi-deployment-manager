@@ -176,6 +176,11 @@ export function paths(stateDir: string): Paths {
  * which RPC mode cannot prompt for, so it is silently skipped. Never --approve instead: that
  * would trust every project resource. An explicit source also replaces discovery, so the
  * user's global ~/.pi/agent/APPEND_SYSTEM.md stays out of the gated session.
+ *
+ * --system-prompt replaces pi's coding-assistant preamble with the manager's own identity. pi then
+ * also skips its generated <tools>/<rules>/<docs> sections, so the verbs' purposes reach the model
+ * only via MANAGER_RULES and the tool schemas. The file must not be named .pi/SYSTEM.md: that is a
+ * project-trust-protected name pi auto-discovers (same as APPEND_SYSTEM.md above).
  */
 export function piArgs(managerDir: string, cfg: ManagerCfg): string[] {
   const args = [
@@ -186,6 +191,8 @@ export function piArgs(managerDir: string, cfg: ManagerCfg): string[] {
     "rpc",
     "-e",
     join(managerDir, "manager", "index.ts"),
+    "--system-prompt",
+    join(managerDir, ".pi", "SYSTEM_BASE.md"),
     "--append-system-prompt",
     join(managerDir, ".pi", "APPEND_SYSTEM.md"),
     // Distinctive tag so teardown's `pkill -f` matches ONLY this pi, never the driver itself.
