@@ -3,11 +3,11 @@
 // the redeploy request went to the manager with nothing reporting the missing file (2026-10-03).
 
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { loadManagerCfg, missingEnvDeploy, resolveManagerDir } from "./lib.ts";
+import { loadManagerCfg, missingEnvDeploy, piArgs, resolveManagerDir } from "./lib.ts";
 
 const root = mkdtempSync(join(tmpdir(), "dvm-guard-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -46,6 +46,16 @@ test("paths that are not directories, and messages with no path, pass", () => {
   expect(missingEnvDeploy(`runtime env ${join(dir, "deploy", "Dockerfile")}`)).toEqual([]);
   expect(missingEnvDeploy(`${root}/does-not-exist`)).toEqual([]);
   expect(missingEnvDeploy("yes, go ahead")).toEqual([]);
+});
+
+test("pi gets the manager's APPEND_SYSTEM.md explicitly, never a blanket project-trust grant", () => {
+  const managerDir = join(import.meta.dir, "..", "..", "..", "..");
+  const args = piArgs(managerDir, { configPath: "", stateDir: "" });
+  const i = args.indexOf("--append-system-prompt");
+  expect(args[i + 1]).toBe(join(managerDir, ".pi", "APPEND_SYSTEM.md"));
+  expect(existsSync(args[i + 1] ?? "")).toBe(true);
+  expect(args).not.toContain("--approve");
+  expect(args).not.toContain("-a");
 });
 
 describe("manager checkout resolution", () => {

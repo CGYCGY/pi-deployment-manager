@@ -167,9 +167,15 @@ export function paths(stateDir: string): Paths {
 }
 
 /**
- * The pi argv that summons the manager in RPC mode. THE GATE: --no-builtin-tools makes
- * bash/read/write/edit/glob unrepresentable; --no-extensions blocks other extensions from
- * re-adding tools; -nc drops ambient AGENTS.md/CLAUDE.md. --mode rpc = stdin/stdout JSONL.
+ * The pi argv that summons the manager in RPC mode. THE GATE: --no-builtin-tools removes pi's
+ * built-in tools (read/bash/edit/write, plus the off-by-default grep/find/ls); --no-extensions
+ * blocks other extensions from re-adding tools; -nc drops ambient AGENTS.md/CLAUDE.md.
+ * --mode rpc = stdin/stdout JSONL.
+ *
+ * .pi/APPEND_SYSTEM.md is passed explicitly because pi only auto-loads it under project trust,
+ * which RPC mode cannot prompt for, so it is silently skipped. Never --approve instead: that
+ * would trust every project resource. An explicit source also replaces discovery, so the
+ * user's global ~/.pi/agent/APPEND_SYSTEM.md stays out of the gated session.
  */
 export function piArgs(managerDir: string, cfg: ManagerCfg): string[] {
   const args = [
@@ -180,6 +186,8 @@ export function piArgs(managerDir: string, cfg: ManagerCfg): string[] {
     "rpc",
     "-e",
     join(managerDir, "manager", "index.ts"),
+    "--append-system-prompt",
+    join(managerDir, ".pi", "APPEND_SYSTEM.md"),
     // Distinctive tag so teardown's `pkill -f` matches ONLY this pi, never the driver itself.
     "--name",
     PI_NAME,
