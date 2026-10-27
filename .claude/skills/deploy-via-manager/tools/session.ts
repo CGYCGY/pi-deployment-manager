@@ -29,6 +29,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { join } from "node:path";
 import readline from "node:readline";
 
 import {
@@ -36,12 +37,13 @@ import {
   loadManagerCfg,
   type ManagerCfg,
   missingEnvDeploy,
-  parseNotify,
   paths,
   type Paths,
+  type Pending,
   PI_NAME,
   piArgs,
   resolveManagerDir,
+  routeRpcEvent,
   takeLines,
 } from "./lib.ts";
 
@@ -343,6 +345,30 @@ function runManager(): never {
   });
 
   const state: Record<string, unknown> = { pid: process.pid, piPid: child.pid, ready: false, startedAt: Date.now() };
+
+  // pi reports startup failures (bad --model, extension load errors) only on stderr; without
+  // this they surface as a bare "exited (code N)". The last line also rides on state.error.
+  const logsDir = join(cfg.stateDir, "logs");
+  mkdirSync(logsDir, { recursive: true });
+  const logFile = join(logsDir, "manager.log");
+  let errBuf = "";
+  let lastErr = "";
+  const logStderr = (lines: string[]): void => {
+    if (!lines.length) return;
+    lastErr = lines[lines.length - 1] ?? lastErr;
+    const at = new Date().toISOString();
+    try {
+      appendFileSync(logFile, lines.map((l) => `${at} [pi] STDERR ${l}\n`).join(""));
+    } catch {
+      /* best effort */
+    }
+  };
+  child.stderr.on("data", (b: Buffer) => {
+    errBuf += b.toString();
+    const { lines, rest } = takeLines(errBuf);
+    errBuf = rest;
+    logStderr(lines);
+  });
   const writeState = (): void => {
     try {
       writeFileSync(p.state, JSON.stringify(state));
@@ -367,7 +393,7 @@ function runManager(): never {
     }
   };
 
-  let current: { id: string; result?: Record<string, unknown> } | null = null;
+  let current: Pending | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   const clearCurrent = (): void => {
     if (timer) clearTimeout(timer);
@@ -394,7 +420,9 @@ function runManager(): never {
   process.on("SIGINT", shutdown);
 
   child.on("exit", (code) => {
-    state.error = `manager pi exited (code ${code ?? "killed"})`;
+    logStderr(errBuf.trim() ? [errBuf.trim()] : []);
+    errBuf = "";
+    state.error = `manager pi exited (code ${code ?? "killed"})${lastErr ? `: ${lastErr}` : ""}`;
     writeState();
     if (current) {
       append({ id: current.id, kind: "error", reason: "manager_down", detail: state.error });
@@ -412,39 +440,24 @@ function runManager(): never {
   });
 
   function handle(line: string): void {
-    let msg: { type?: string; id?: string; data?: { text?: string } };
+    let msg: unknown;
     try {
       msg = JSON.parse(line);
     } catch {
       return;
     }
-    const note = parseNotify(msg);
-    if (note.ready) {
+    const step = routeRpcEvent(msg, current);
+    if (step.do === "ready") {
       if (!state.ready) {
         state.ready = true;
         writeState();
       }
-      return;
-    }
-    if (note.result !== undefined) {
-      if (current) current.result = note.result as Record<string, unknown>;
-      return;
-    }
-    // Settle, not end: pi may follow an agent_end with an auto-retry, a compaction
-    // retry, or a queued continuation, and answering there would relay the pre-retry
-    // text while pi is still working — the next `send` would then hit a busy session.
-    // A 20-minute deploy turn is exactly the shape that trips auto-compaction.
-    if (msg.type === "agent_settled") {
-      if (!current) return; // a stray settle between requests
-      send({ type: "get_last_assistant_text", id: `verdict:${current.id}` });
-      return;
-    }
-    if (msg.type === "response" && current && msg.id === `verdict:${current.id}`) {
-      const text = (msg.data?.text ?? "").trim();
-      // A deploy CONCLUDED iff the manager emitted its code-derived result this turn;
-      // otherwise the assistant text is a question/status to relay back to the caller.
-      if (current.result !== undefined) append({ id: current.id, kind: "result", result: current.result, text });
-      else append({ id: current.id, kind: "reply", text });
+    } else if (step.do === "result") {
+      if (current) current.result = step.result;
+    } else if (step.do === "send") {
+      send(step.command);
+    } else if (step.do === "finish") {
+      append(step.out);
       clearCurrent();
     }
   }

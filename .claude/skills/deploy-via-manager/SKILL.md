@@ -88,8 +88,8 @@ SETUP: `${CLAUDE_SKILL_DIR}/setup.sh` — finds or clones the manager checkout a
 - **EXAMPLES:** "deploy/deploy.sh and deploy/Dockerfile exist but deploy/.env.deploy is missing"
 
 ### Manager won't start / stuck
-- **IF:** a tool prints `kind:"error"` with reason `spawn_failed` / `ready_timeout` / `manager_down` / `timeout`
-- **THEN:** run the `clean` tool, surface the `detail` (point at `<stateDir>/logs/manager.log`), and retry once.
+- **IF:** a tool prints `kind:"error"` with reason `spawn_failed` / `ready_timeout` / `manager_down` / `timeout` / `aborted` / `prompt_rejected`
+- **THEN:** run the `clean` tool, surface the `detail` (point at `<stateDir>/logs/manager.log`, which also carries pi's stderr), and retry once.
 - **EXAMPLES:** "manager did not start", "no result within N min"
 
 ## Report

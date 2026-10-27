@@ -211,6 +211,81 @@ export function parseNotify(msg: unknown): { ready?: boolean; result?: unknown }
   return {};
 }
 
+/** The request the detached manager is waiting on; `result` is set once the RESULT notify lands. */
+export interface Pending {
+  id: string;
+  result?: Record<string, unknown>;
+}
+
+/** What the detached manager does with one pi RPC event. `finish` = append `out` and clear the request. */
+export type RpcStep =
+  | { do: "none" }
+  | { do: "ready" }
+  | { do: "result"; result: Record<string, unknown> }
+  | { do: "send"; command: Record<string, unknown> }
+  | { do: "finish"; out: Record<string, unknown> };
+
+interface RpcEvent {
+  type?: string;
+  id?: string;
+  command?: string;
+  success?: boolean;
+  error?: string;
+  aborted?: boolean;
+  data?: { text?: string; disposition?: string };
+}
+
+export function verdictId(reqId: string): string {
+  return `verdict:${reqId}`;
+}
+
+export function routeRpcEvent(raw: unknown, current: Pending | null): RpcStep {
+  const note = parseNotify(raw);
+  if (note.ready) return { do: "ready" };
+  if (note.result !== undefined) {
+    return current ? { do: "result", result: note.result as Record<string, unknown> } : { do: "none" };
+  }
+  const msg = (raw ?? {}) as RpcEvent;
+  // A settle with no request is stray, including a late aborted settle after a timeout-abort
+  // already answered and cleared the request.
+  if (!current) return { do: "none" };
+  const id = current.id;
+
+  // Settle, not end: pi may follow an agent_end with an auto-retry, a compaction retry, or a
+  // queued continuation, and answering there would relay the pre-retry text while pi is still
+  // working — the next `send` would then hit a busy session. A 20-minute deploy turn is
+  // exactly the shape that trips auto-compaction.
+  if (msg.type === "agent_settled") {
+    // `aborted` arrived in pi 1.1; older pi omits it, which reads as not aborted. A result
+    // emitted before the abort still concluded the deploy, so it wins over the abort.
+    if (msg.aborted === true && current.result === undefined) {
+      return { do: "finish", out: { id, kind: "error", reason: "aborted", detail: "the manager's turn was aborted before it concluded." } };
+    }
+    return { do: "send", command: { type: "get_last_assistant_text", id: verdictId(id) } };
+  }
+
+  if (msg.type === "response" && msg.command === "prompt" && msg.id === id) {
+    if (msg.success === false) {
+      return { do: "finish", out: { id, kind: "error", reason: "prompt_rejected", detail: msg.error ?? "pi rejected the prompt." } };
+    }
+    // "handled": an extension command/input handler consumed it; no run starts, so no settle comes.
+    if (msg.data?.disposition === "handled") {
+      return { do: "finish", out: { id, kind: "reply", text: "(the manager handled this message without starting a turn)" } };
+    }
+    return { do: "none" };
+  }
+
+  if (msg.type === "response" && msg.id === verdictId(id)) {
+    const text = (msg.data?.text ?? "").trim();
+    // A deploy CONCLUDED iff the manager emitted its code-derived result this turn; otherwise
+    // the assistant text is a question/status to relay back to the caller.
+    return current.result !== undefined
+      ? { do: "finish", out: { id, kind: "result", result: current.result, text } }
+      : { do: "finish", out: { id, kind: "reply", text } };
+  }
+  return { do: "none" };
+}
+
 /** Split a growing buffer into complete LF-delimited lines (RPC is LF-only; strip a stray \r). */
 export function takeLines(buf: string): { lines: string[]; rest: string } {
   const lines: string[] = [];
