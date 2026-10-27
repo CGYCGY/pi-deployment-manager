@@ -331,11 +331,12 @@ of them health-checks the app or the build fails — there is no other way to en
 The manager session is long-lived across a client session but **each deploy is an independent
 task** → per-deploy context isolation. Within a deploy the context **persists across turns** so the
 caller can answer a blocking question and the manager resumes mid-flow (§3); the bound `currentDeploy`
-is held until the deploy concludes. Then, mirroring the testers, the `agent_end` hook **`compact()`s**
+is held until the deploy concludes. Then the `agent_settled` hook **`compact()`s**
 with strong "brand-new unrelated deploy, discard prior" instructions (the any-context reset primitive;
 `newSession` is gated to command contexts) so the next, unrelated deploy in the same session starts
 clean. A deploy is never reset mid-flow (would orphan an in-flight ship) — `compact()` fires only
-*after* a ship concluded it.
+*after* a ship concluded it. Not on `agent_end`: `compact()` aborts first, and there the run is still
+active, so every concluded turn would settle as `aborted:true`.
 
 ---
 

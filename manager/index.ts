@@ -102,7 +102,7 @@ export default function managerExtension(pi: ExtensionAPI) {
   // PERSISTS across turns (so a caller can answer a question and the agent continues)
   // and is reset only after a deploy concludes, so the next, unrelated deploy in the
   // same session starts clean. `concludedThisTurn` is set by concludeDeploy (the ship
-  // verbs) so agent_end knows the deploy is over and can shed context.
+  // verbs) so agent_settled knows the deploy is over and can shed context.
   let currentDeploy: CurrentDeploy | null = null;
   let concludedThisTurn = false;
 
@@ -123,7 +123,7 @@ export default function managerExtension(pi: ExtensionAPI) {
    * notify channel for the driver to capture. Called by the ship verbs (deploy/redeploy)
    * once the app has been health-checked (or the ship failed) — the only terminal points.
    * Does NOT clear currentDeploy (the agent may still call status/logs to summarize); the
-   * agent_end hook resets it for the next deploy.
+   * agent_settled hook resets it for the next deploy.
    */
   const concludeDeploy = (ctx: ExtensionContext): void => {
     if (!currentDeploy) return;
@@ -174,12 +174,17 @@ export default function managerExtension(pi: ExtensionAPI) {
     refreshUI(ctx);
   });
 
-  // A deploy turn ended. If it CONCLUDED (a ship was health-checked, result already
+  // A deploy turn settled. If it CONCLUDED (a ship was health-checked, result already
   // emitted by concludeDeploy), shed this deploy: drop the context so the next, UNRELATED
   // deploy in the same session starts clean, and clear the bound context. If it did NOT
   // conclude, the agent's last message is a question — leave everything in place so the
   // caller's reply continues this same deploy.
-  pi.on("agent_end", async (_event, ctx) => {
+  //
+  // Must stay on agent_settled, NOT agent_end: compact() first awaits session.abort(), and
+  // inside agent_end the run is still active, so that abort flags it — every successful
+  // deploy turn would then settle with aborted:true. agent_end also is not final-idle
+  // (retries/compaction recovery can still follow it).
+  pi.on("agent_settled", async (_event, ctx) => {
     activeCtx = ctx;
     if (!concludedThisTurn) return;
     concludedThisTurn = false;
