@@ -67,7 +67,7 @@ say "bun $(bun --version)"
 if command -v pi >/dev/null 2>&1; then
   say "pi found"
 else
-  warn "pi is not on PATH; the skill driver spawns it to run the manager. Install: npm install -g @earendil-works/pi-coding-agent"
+  warn "pi is not on PATH; the skill driver spawns it to run the manager. Install: curl -fsSL https://pi.dev/install.sh | sh (or: npm install -g --ignore-scripts @earendil-works/pi-coding-agent)"
 fi
 
 if ! command -v docker >/dev/null 2>&1; then

@@ -270,13 +270,13 @@
             <tr><td style="color:var(--teal)">read</td><td>target <code style="font-family:var(--mono)">project_dir</code>, <b>read-only</b> — to detect the profile</td></tr>
             <tr><td style="color:var(--amber)">write</td><td>allowlist: <code style="font-family:var(--mono)">deploy/*</code> + <code style="font-family:var(--mono)">.gitignore</code>/<code style="font-family:var(--mono)">.env.production</code> + git commit. nothing else</td></tr>
             <tr><td style="color:var(--accent)">network</td><td>Coolify · Cloudflare · GHCR · Convex · GitHub APIs</td></tr>
-            <tr><td style="color:var(--red)">denied</td><td>general Bash · Edit · Read · Glob · Write outside allowlist</td></tr>
+            <tr><td style="color:var(--red)">denied</td><td>general bash · edit · read · grep/find/ls · write outside allowlist</td></tr>
           </tbody>
         </table>
         <p class="note" style="margin-top:10px">This allowlist <b>is</b> the "only touch deploy/, never other files" guarantee.</p>
       </div>
     </div>
-    <p class="note">Two-layer gate: <code>--no-builtin-tools</code> makes bash/read/write/edit/glob unrepresentable, and <code>setActiveTools</code> re-pins the active set to exactly the 11 verbs on session start (belt-and-braces). 1 purpose · 1 agent · 1 deploy at a time — the pi-e2e-tester spoke philosophy: a closed, semantic surface, not raw access.</p>
+    <p class="note">Two-layer gate: <code>--no-builtin-tools</code> makes pi's built-in read/bash/edit/write (and grep/find/ls) unrepresentable, and <code>setActiveTools</code> re-pins the active set to exactly the 11 verbs on session start (belt-and-braces). 1 purpose · 1 agent · 1 deploy at a time — the pi-e2e-tester spoke philosophy: a closed, semantic surface, not raw access.</p>
   </section>
 
   <!-- VERBS -->

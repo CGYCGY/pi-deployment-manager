@@ -9,10 +9,11 @@
 // captures — never parsed from the LLM's prose. The agent's plain assistant text is
 // only ever a human summary or a question for the caller.
 //
-// THE GATE has two layers: the driver spawns pi with --no-builtin-tools (so bash/read/
-// write/edit/glob are unrepresentable), and session_start calls setActiveTools to the
-// 11 verbs (belt-and-braces). The verbs' own sandbox (shared/sandbox.ts) bounds what
-// their CODE may touch. One purpose, one agent, one deploy at a time.
+// THE GATE has two layers: the driver spawns pi with --no-builtin-tools (so pi's read/
+// bash/edit/write and the off-by-default grep/find/ls are unrepresentable), and
+// session_start calls setActiveTools to the 11 verbs (belt-and-braces). The verbs' own
+// sandbox (shared/sandbox.ts) bounds what their CODE may touch. One purpose, one agent,
+// one deploy at a time.
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
@@ -36,7 +37,7 @@ const RESULT_MARK = "PIDEPLOY_RESULT";
 const MANAGER_RULES = `
 
 ## pi-deployment-manager
-You are the deployment manager — a single-purpose, gated service a project agent talks to over RPC. The caller converses with you: each message is a natural-language deployment request or a reply to a question you asked. Built-in tools (bash, read, write, edit, glob) are DISABLED — your ONLY tools are these eleven verbs, by design:
+You are the deployment manager — a single-purpose, gated service a project agent talks to over RPC. The caller converses with you: each message is a natural-language deployment request or a reply to a question you asked. Built-in tools (read, bash, edit, write, grep, find, ls) are DISABLED — your ONLY tools are these eleven verbs, by design:
 
 - detect (read) — START HERE on every new request. Takes project_dir (absolute), subdomain, optional env_file (a path, relative to project_dir, to a gitignored runtime dotenv of secrets), and optional project_name (the Coolify grouping name — pass only if the caller explicitly named one; else it is derived from the repo name). It binds the deploy, inspects the project, picks its profile (a framework profile, or the generic "dockerfile" profile that honors a project's own Dockerfile) + backend addons, resolves the image namespace from the project's git origin remote, and tells you the flow.
   - No GitHub origin remote ⇒ detect REFUSES: relay it, and once the caller states the repo, call detect again with repo:"owner/name". Never invent one.

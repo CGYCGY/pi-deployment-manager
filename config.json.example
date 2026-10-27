@@ -32,7 +32,7 @@
   },
 
   "model": "openai/gpt-6.1-sol",
-  "_model_note": "Manager session model; matches the pi-e2e-tester hub. Empty = pi default.",
+  "_model_note": "Manager session model, written provider/id: since pi 1.3 a bare id that several providers offer is an error unless exactly one of them has credentials. Matches the pi-e2e-tester hub. Empty = pi default.",
   "thinking": "high",
   "_thinking_note": "Reasoning tier; matches the pi-e2e-tester hub. Empty = pi default."
 }

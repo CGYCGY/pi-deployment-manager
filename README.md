@@ -12,7 +12,7 @@ the visual overview.
 
 ## Why gated
 
-The manager LLM has **no raw `bash`/`read`/`write`/`edit`/`glob`** — it is launched with
+The manager LLM has **no raw `read`/`bash`/`edit`/`write`** (nor the off-by-default `grep`/`find`/`ls`) — it is launched with
 `--no-builtin-tools`, so the only tools that *exist* are the eleven deployment verbs the extension
 registers (and on session start `setActiveTools` re-pins the active set to exactly those eleven,
 belt-and-braces). Their code enforces a path sandbox (it may only write a project's `deploy/`
@@ -85,7 +85,7 @@ mounts empty).
 
 Prerequisites on the host that runs the manager:
 
-- [`pi`](../pi-references) (`npm install -g @earendil-works/pi-coding-agent`), `bun`
+- [`pi`](../pi-references) (`curl -fsSL https://pi.dev/install.sh | sh`), `bun`
 - `docker`, logged in to GHCR: `docker login ghcr.io` (the image build host)
 - `curl` — used by the bundled `deploy.sh` to trigger the Coolify webhook
 - `gh`, authenticated (`gh auth login`) — for the GHCR image repo

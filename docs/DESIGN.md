@@ -147,8 +147,8 @@ redeploy path, else initial. Coolify is authoritative; the file is only a hint.
 
 ## 5. Execution layer — gated custom-tool surface, native engine in code
 
-**The manager is a heavily-gated, single-purpose agent.** Its LLM has **no raw Bash / Edit / Read /
-Glob** and cannot roam the filesystem. It sees **only** the semantic verbs of §7 — custom tools
+**The manager is a heavily-gated, single-purpose agent.** Its LLM has **no raw read / bash / edit /
+write** (nor grep / find / ls) and cannot roam the filesystem. It sees **only** the semantic verbs of §7 — custom tools
 implemented in code (the pi-e2e-tester spoke philosophy: a closed, semantic surface, not raw device
 access). One purpose, one agent, one deploy at a time.
 
@@ -179,7 +179,7 @@ depends on **no external `skills_dir`** — clone, `./setup.sh`, run.
 | **read**   | the target `project_dir`, **read-only** — `detect` must inspect `package.json` / `next.config` / `astro.config` / `convex/` / `index.html` to pick the profile, and runs `git remote get-url origin` to resolve the image namespace. |
 | **write**  | a fixed **allowlist**: `<project_dir>/deploy/*`, plus two project-root writes (`.gitignore` entries, `.env.production`), and `git add/commit` of those. **Nothing else.** |
 | **network**| Coolify · Cloudflare · GHCR · Convex Cloud · GitHub (`gh`) APIs only. |
-| **denied** | general Bash, Edit, Read, Glob, Write outside the allowlist. |
+| **denied** | general bash, edit, read, grep/find/ls, write outside the allowlist. |
 
 This allowlist **is** the "only touch `deploy/`, never other files" guarantee — a path check in the
 tool implementation, not a rule the LLM is asked to honor.
