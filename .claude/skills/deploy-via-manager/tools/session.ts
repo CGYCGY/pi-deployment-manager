@@ -199,7 +199,10 @@ function bringUp(managerDir: string, cfg: ManagerCfg, p: Paths): BringUp {
         err: {
           kind: "error",
           reason: "ready_timeout",
-          detail: `manager did not become ready within ${Math.round(UP_READY_TIMEOUT_MS / 1000)}s; see <stateDir>/logs/manager.log.`,
+          detail:
+            `manager did not become ready within ${Math.round(UP_READY_TIMEOUT_MS / 1000)}s` +
+            (st?.lastStderr ? ` (pi stderr: ${String(st.lastStderr)})` : "") +
+            "; see <stateDir>/logs/manager.log.",
         },
       };
     }
@@ -345,9 +348,18 @@ function runManager(): never {
   });
 
   const state: Record<string, unknown> = { pid: process.pid, piPid: child.pid, ready: false, startedAt: Date.now() };
+  const writeState = (): void => {
+    try {
+      writeFileSync(p.state, JSON.stringify(state));
+    } catch {
+      /* best effort */
+    }
+  };
+  writeState();
 
-  // pi reports startup failures (bad --model, extension load errors) only on stderr; without
-  // this they surface as a bare "exited (code N)". The last line also rides on state.error.
+  // pi reports startup failures only on stderr, and some (an unknown --model) leave it running
+  // without ever booting the session, so `up` would only say ready_timeout. The last line rides
+  // on the state file for bringUp's error detail.
   const logsDir = join(cfg.stateDir, "logs");
   mkdirSync(logsDir, { recursive: true });
   const logFile = join(logsDir, "manager.log");
@@ -356,6 +368,8 @@ function runManager(): never {
   const logStderr = (lines: string[]): void => {
     if (!lines.length) return;
     lastErr = lines[lines.length - 1] ?? lastErr;
+    state.lastStderr = lastErr;
+    writeState();
     const at = new Date().toISOString();
     try {
       appendFileSync(logFile, lines.map((l) => `${at} [pi] STDERR ${l}\n`).join(""));
@@ -369,14 +383,6 @@ function runManager(): never {
     errBuf = rest;
     logStderr(lines);
   });
-  const writeState = (): void => {
-    try {
-      writeFileSync(p.state, JSON.stringify(state));
-    } catch {
-      /* best effort */
-    }
-  };
-  writeState();
 
   const send = (obj: unknown): void => {
     try {
