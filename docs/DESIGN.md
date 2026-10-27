@@ -256,7 +256,7 @@ the Coolify box; it only runs `convex deploy` and wires the resulting URL into t
 
 ## 7. Verb surface — the manager's ONLY tools (semantic, not skill-passthrough)
 
-These ten verbs are the **complete** tool surface exposed to the manager LLM. There is no raw
+These eleven verbs are the **complete** tool surface exposed to the manager LLM. There is no raw
 Bash/Edit/Read alongside them (§5.0).
 
 | verb       | r/w  | does                                                                              |

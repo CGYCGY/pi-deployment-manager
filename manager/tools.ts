@@ -1,4 +1,4 @@
-// The 10 deployment verbs registered as pi tools — the COMPLETE tool surface the
+// The 11 deployment verbs registered as pi tools — the COMPLETE tool surface the
 // manager LLM sees. Built-in tools are gated off (--no-builtin-tools + setActiveTools),
 // so these verbs are the only things representable. read ≠ write: detect/status/logs
 // never mutate infra.
@@ -51,7 +51,8 @@ export interface ManagerToolDeps {
   setActiveCtx: (ctx: ExtensionContext) => void;
 }
 
-/** The complete verb set, in flow order. Passed to pi.setActiveTools as the gate's allowlist. */
+/** The complete verb set, in flow order. session_start passes it to pi.setActiveTools, which REPLACES
+ * the active set — a registered verb missing here is invisible to the model (verbs.test.ts pins it). */
 export const VERB_NAMES = [
   "detect",
   "scaffold",
@@ -61,6 +62,7 @@ export const VERB_NAMES = [
   "dns",
   "deploy",
   "redeploy",
+  "sync_storages",
   "status",
   "logs",
 ] as const;

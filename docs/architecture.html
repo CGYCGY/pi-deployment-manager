@@ -163,7 +163,7 @@
       <div class="node service">
         <div class="role">Service · gated</div>
         <h3>pi-deployment-manager</h3>
-        <p><b>Heavily gated:</b> no raw Bash/Edit/Read — only the 10 verbs. Native Coolify/Cloudflare
+        <p><b>Heavily gated:</b> no raw Bash/Edit/Read — only the 11 verbs. Native Coolify/Cloudflare
            HTTP, all creds, the profile registry &amp; guards. The skill driver <b>spawns it on demand</b>
            as a <code style="font-family:var(--mono)">pi --mode rpc</code> subprocess; it runs <b>in place</b> on the repo.</p>
       </div>
@@ -276,7 +276,7 @@
         <p class="note" style="margin-top:10px">This allowlist <b>is</b> the "only touch deploy/, never other files" guarantee.</p>
       </div>
     </div>
-    <p class="note">Two-layer gate: <code>--no-builtin-tools</code> makes bash/read/write/edit/glob unrepresentable, and <code>setActiveTools</code> re-pins the active set to exactly the 10 verbs on session start (belt-and-braces). 1 purpose · 1 agent · 1 deploy at a time — the pi-e2e-tester spoke philosophy: a closed, semantic surface, not raw access.</p>
+    <p class="note">Two-layer gate: <code>--no-builtin-tools</code> makes bash/read/write/edit/glob unrepresentable, and <code>setActiveTools</code> re-pins the active set to exactly the 11 verbs on session start (belt-and-braces). 1 purpose · 1 agent · 1 deploy at a time — the pi-e2e-tester spoke philosophy: a closed, semantic surface, not raw access.</p>
   </section>
 
   <!-- VERBS -->
@@ -330,7 +330,7 @@
         <div class="dec"><dt>result</dt><dd>Built <b>in code from the ledger</b>, emitted on a <b>notify</b> channel (<code style="font-family:var(--mono)">PIDEPLOY_RESULT</code>); a deploy concludes only when a ship verb health-checks the app.</dd></div>
         <div class="dec"><dt>project access</dt><dd>Both modes, <b>operate in place</b> — no clone. Initial writes+commits; update is API-only.</dd></div>
         <div class="dec"><dt>subdomain</dt><dd><b>Caller-specified</b> per deploy; collision-guarded against the single shared domain.</dd></div>
-        <div class="dec"><dt>gating</dt><dd><b>No raw Bash/Edit/Read</b> — only the 10 verbs. Read project / write-deploy allowlist, enforced in tool code.</dd></div>
+        <div class="dec"><dt>gating</dt><dd><b>No raw Bash/Edit/Read</b> — only the 11 verbs. Read project / write-deploy allowlist, enforced in tool code.</dd></div>
         <div class="dec"><dt>execution</dt><dd>Coolify/Cloudflare are <b>native HTTP</b> in the tool code; only the local build (deploy.sh) shells out. No external skill scripts.</dd></div>
         <div class="dec"><dt>creds</dt><dd><b>Centralized in the manager</b>; injected into each project's gitignored deploy/.env.deploy at deploy time, never committed.</dd></div>
         <div class="dec"><dt>convex</dt><dd><b>Convex Cloud</b>, deployed first; prod URL injected as build-time env into the frontend.</dd></div>

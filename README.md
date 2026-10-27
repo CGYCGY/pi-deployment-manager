@@ -13,8 +13,8 @@ the visual overview.
 ## Why gated
 
 The manager LLM has **no raw `bash`/`read`/`write`/`edit`/`glob`** — it is launched with
-`--no-builtin-tools`, so the only tools that *exist* are the ten deployment verbs the extension
-registers (and on session start `setActiveTools` re-pins the active set to exactly those ten,
+`--no-builtin-tools`, so the only tools that *exist* are the eleven deployment verbs the extension
+registers (and on session start `setActiveTools` re-pins the active set to exactly those eleven,
 belt-and-braces). Their code enforces a path sandbox (it may only write a project's `deploy/`
 directory, `.gitignore`, and `.env.production`) and three fail-closed guards. The wrong action is
 *unrepresentable*, not merely discouraged. One purpose, one agent, one deploy at a time.
@@ -26,10 +26,10 @@ a skill is "a prompt telling an LLM to run bash", exactly the capability the gat
 is fully standalone — clone, `./setup.sh`, run; nothing outside the repo except its config and state
 in `~/.gylab/pi-deployment-manager/`.
 
-## The ten verbs
+## The eleven verbs
 
-`detect` · `scaffold` · `convex` · `provision` · `env` · `dns` · `deploy` · `redeploy` · `status` ·
-`logs`. `read ≠ write`: `detect`/`status`/`logs` never mutate infra.
+`detect` · `scaffold` · `convex` · `provision` · `env` · `dns` · `deploy` · `redeploy` ·
+`sync_storages` · `status` · `logs`. `read ≠ write`: `detect`/`status`/`logs` never mutate infra.
 
 `detect` is the entry verb: the manager's LLM extracts `project_dir` (absolute), `subdomain`, and an
 optional `env_file` from the caller's request and passes them to `detect`, which **binds the deploy

@@ -1,6 +1,6 @@
 // The deployment manager: one gated pi session a project agent SUMMONS over pi RPC
 // mode and converses with in natural language. The caller sends a prompt ("deploy
-// <dir> at <subdomain>…"); the manager's LLM drives the 10 verbs, asks the caller
+// <dir> at <subdomain>…"); the manager's LLM drives the 11 verbs, asks the caller
 // back when it is blocked, and CONCLUDES a deploy by health-checking the shipped app.
 //
 // Transport is pi's native --mode rpc (stdin/stdout JSONL) — there is NO HTTP server,
@@ -11,7 +11,7 @@
 //
 // THE GATE has two layers: the driver spawns pi with --no-builtin-tools (so bash/read/
 // write/edit/glob are unrepresentable), and session_start calls setActiveTools to the
-// 10 verbs (belt-and-braces). The verbs' own sandbox (shared/sandbox.ts) bounds what
+// 11 verbs (belt-and-braces). The verbs' own sandbox (shared/sandbox.ts) bounds what
 // their CODE may touch. One purpose, one agent, one deploy at a time.
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -36,7 +36,7 @@ const RESULT_MARK = "PIDEPLOY_RESULT";
 const MANAGER_RULES = `
 
 ## pi-deployment-manager
-You are the deployment manager — a single-purpose, gated service a project agent talks to over RPC. The caller converses with you: each message is a natural-language deployment request or a reply to a question you asked. Built-in tools (bash, read, write, edit, glob) are DISABLED — your ONLY tools are these ten verbs, by design:
+You are the deployment manager — a single-purpose, gated service a project agent talks to over RPC. The caller converses with you: each message is a natural-language deployment request or a reply to a question you asked. Built-in tools (bash, read, write, edit, glob) are DISABLED — your ONLY tools are these eleven verbs, by design:
 
 - detect (read) — START HERE on every new request. Takes project_dir (absolute), subdomain, optional env_file (a path, relative to project_dir, to a gitignored runtime dotenv of secrets), and optional project_name (the Coolify grouping name — pass only if the caller explicitly named one; else it is derived from the repo name). It binds the deploy, inspects the project, picks its profile (a framework profile, or the generic "dockerfile" profile that honors a project's own Dockerfile) + backend addons, resolves the image namespace from the project's git origin remote, and tells you the flow.
   - No GitHub origin remote ⇒ detect REFUSES: relay it, and once the caller states the repo, call detect again with repo:"owner/name". Never invent one.
@@ -48,6 +48,7 @@ You are the deployment manager — a single-purpose, gated service a project age
 - dns (write) — point the caller's subdomain at the app (Cloudflare record + Coolify domain).
 - deploy (write) — build the image, push to GHCR, trigger the Coolify deploy (initial ship).
 - redeploy (write) — rebuild + re-trigger for an already-set-up project (update path, API-only).
+- sync_storages (write) — add any persistent volume an already-provisioned app is missing versus its Dockerfile's VOLUME lines. Additive only; the new mount takes effect on the NEXT deploy and mounts EMPTY — tell the caller that.
 - status (read) — read the Coolify deployment status.
 - logs (read) — tail the Coolify app logs (for diagnosing a failure).
 
